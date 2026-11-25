@@ -62,23 +62,40 @@ def load_suv(folder):
     return vol * f, (abs(float(z)), float(s0.PixelSpacing[0]), float(s0.PixelSpacing[1])), origin
 
 
-def load_ct(folder, shape, spacing, origin):
+def ct_series(folder):
+    """{uid: [(chemin, en-tête)]} des séries CT avec position (écarte le rapport de dose et les captures)."""
+    return {u: hs for u, hs in _scan(folder, "CT").items() if "ImagePositionPatient" in hs[0][1]}
+
+
+def _ct_overlap(hs, zs):
+    z = [float(h.ImagePositionPatient[2]) for _, h in hs]
+    return max(0.0, min(max(z), zs[-1]) - max(min(z), zs[0]))
+
+
+def ct_choices(series, origin):
+    """Séries CT proposées : [{uid, desc, n, couverture}], couverture = part de la hauteur du TEP couverte par le CT."""
+    zs = origin[0]
+    span = (zs[-1] - zs[0]) or 1
+    out = [{"uid": u, "desc": str(hs[0][1].get("SeriesDescription", "CT")), "n": len(hs),
+            "couverture": round(_ct_overlap(hs, zs) / span, 2)} for u, hs in series.items() if len(hs) > 10]
+    return sorted(out, key=lambda c: (-c["couverture"], -c["n"], c["desc"]))
+
+
+def default_ct_uid(series, origin):
+    """Série qui recouvre le mieux le TEP ; à égalité, noyau STANDARD (tissus mous)."""
+    return max(series, key=lambda u: (_ct_overlap(series[u], origin[0]), series[u][0][1].get("ConvolutionKernel") == "STANDARD"))
+
+
+def load_ct(folder, shape, spacing, origin, uid=None, series=None):
     """CT (HU) rééchantillonné sur la grille du TEP [z,y,x] ; -1000 (air) hors du champ du CT.
-    Choisit la série CT qui recouvre le mieux le TEP (à égalité : noyau STANDARD, tissus mous).
+    uid : série à utiliser (défaut : `default_ct_uid`) ; series : résultat de `ct_series` s'il est déjà scanné.
     Retourne None s'il n'y a pas de CT. Suppose des coupes axiales dans le même repère que le TEP."""
     zs, y0, x0 = origin
-    # on écarte les CT sans position (rapport de dose, captures)
-    series = {u: hs for u, hs in _scan(folder, "CT").items() if "ImagePositionPatient" in hs[0][1]}
+    series = series if series is not None else ct_series(folder)
     if not series:
         return None
-
-    def key(hs):
-        z = [float(h.ImagePositionPatient[2]) for _, h in hs]
-        overlap = max(0.0, min(max(z), zs[-1]) - max(min(z), zs[0]))
-        return overlap, hs[0][1].get("ConvolutionKernel") == "STANDARD"
-
-    cts = sorted((pydicom.dcmread(p) for p, _ in max(series.values(), key=key)),
-                 key=lambda s: float(s.ImagePositionPatient[2]))
+    uid = uid if uid in series else default_ct_uid(series, origin)
+    cts = sorted((pydicom.dcmread(p) for p, _ in series[uid]), key=lambda s: float(s.ImagePositionPatient[2]))
     if [round(v) for v in cts[0].ImageOrientationPatient] != [1, 0, 0, 0, 1, 0]:
         raise SystemExit("CT : orientation non axiale non gérée")
     vol = np.stack([(s.pixel_array * float(s.RescaleSlope) + float(s.RescaleIntercept)).astype(np.int16)
@@ -106,11 +123,12 @@ def analyze(suv, voxel_ml, thr=2.5):
     """Lésions = composantes connexes de SUV >= thr. Triées par SUVmax décroissant."""
     labels, n = ndimage.label(suv >= thr)
     out = []
+    peaks = ndimage.maximum_position(suv, labels, range(1, n + 1)) if n else []  # position (z,y,x) du pic de chaque lésion
     for i in range(1, n + 1):
         v = suv[labels == i]
         mtv = v.size * voxel_ml
         out.append({"suv_max": float(v.max()), "suv_mean": float(v.mean()),
-                    "mtv_ml": mtv, "tlg": float(v.mean() * mtv)})
+                    "mtv_ml": mtv, "tlg": float(v.mean() * mtv), "peak": [int(c) for c in peaks[i - 1]]})
     return sorted(out, key=lambda r: -r["suv_max"])
 
 
@@ -132,6 +150,26 @@ def measure_region(img, sr, sc, r, c, pct=50, radius_mm=8):
         return None
     lab, _ = ndimage.label(img >= min(max(pct, 1), 100) / 100 * peak)
     mask = lab == lab[seed]
+    res = _describe(mask, img, sr, sc)
+    res["suv_max"], res["suv_mean"] = res.pop("vmax"), res.pop("vmean")
+    return res
+
+
+def measure_tolerance(img, sr, sc, r, c, tol=50):
+    """Mesure sur le CT autour du pixel (r, c) : région connexe dont le HU est à ± tol du HU local
+    (médiane 3x3). Un seuil de tolérance trop large fait « fuir » la région dans les tissus voisins de même densité."""
+    win = img[max(0, r - 1):r + 2, max(0, c - 1):c + 2].astype(np.float32)
+    ref = float(np.median(win))
+    dr, dc = np.unravel_index(np.abs(win - ref).argmin(), win.shape)  # un pixel de la fenêtre vaut la médiane
+    seed = (max(0, r - 1) + dr, max(0, c - 1) + dc)
+    lab, _ = ndimage.label(np.abs(img.astype(np.float32) - ref) <= tol)
+    res = _describe(lab == lab[seed], img, sr, sc)
+    res["hu_ref"], res["hu_mean"], res["hu_max"] = ref, res.pop("vmean"), res.pop("vmax")
+    return res
+
+
+def _describe(mask, img, sr, sc):
+    """Géométrie d'une région 2D : plus grand diamètre (Feret max), étendue perpendiculaire, contour, aire, valeurs."""
     edge = np.argwhere(mask & ~ndimage.binary_erosion(mask, border_value=0))
     # coins des pixels de bord : un pixel isolé mesure sr x sc, pas 0
     corners = (edge[:, None, :] + np.array([[-.5, -.5], [-.5, .5], [.5, -.5], [.5, .5]])).reshape(-1, 2)
@@ -149,7 +187,7 @@ def measure_region(img, sr, sc, r, c, pct=50, radius_mm=8):
     k = np.array([sr, sc])
     return {
         "length_mm": length, "width_mm": float(proj.max() - proj.min()),
-        "suv_max": float(vals.max()), "suv_mean": float(vals.mean()), "area_mm2": float(mask.sum() * sr * sc),
+        "vmax": float(vals.max()), "vmean": float(vals.mean()), "area_mm2": float(mask.sum() * sr * sc),
         "axes": [(hull[a] / k).tolist(), (hull[b] / k).tolist()],
         "perp": [((base + n * proj.min()) / k).tolist(), ((base + n * proj.max()) / k).tolist()],
         "boundary": edge[:: max(1, len(edge) // 3000)].tolist(),

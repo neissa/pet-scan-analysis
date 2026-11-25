@@ -4,3 +4,4 @@ __pycache__/
 # données patient : ne jamais committer
 *.dcm
 *.png
+*.pdf

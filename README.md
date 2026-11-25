@@ -24,6 +24,19 @@ Coupes axiale / coronale / sagittale (sliders), MIP, fenêtre SUV, seuil et tabl
 Molette = zoom centré sur la souris. Outils : *Naviguer* (un clic positionne les autres coupes), *Règle* (2 clics, distance en mm),
 *Mesure auto* (clic sur une structure : région connexe ≥ X % du max local autour du clic ; plus grand diamètre + étendue perpendiculaire, mesurés sur le TEP dans la coupe affichée). Le serveur écoute uniquement en local (données patient). À lancer depuis la racine du repo (`index.html` est lu à côté de `viewer.py`).
 
+### Fonctions de la visionneuse
+
+- **Dossier** : `python viewer.py` sans argument, puis champ de chemin, « Parcourir… » (sélecteur natif, tkinter) et dossiers récents (`~/.pet-scan-analysis.json`, hors repo). Le chargement se fait en arrière-plan ; une erreur laisse l'ancien volume affiché.
+- **Vues** : 4 vues de même hauteur, zoom molette centré sur la souris, molette sur tous les curseurs (Maj = ×10), fusion TEP + CT.
+- **Outils** : règle en temps réel (barres aux extrémités), mesure auto sur le TEP (région ≥ X % du max local) ou sur le CT (± tolérance en HU), recalculées en direct quand le curseur bouge, loupe ×4 à viseur creux.
+- **Série CT** : si le dossier en contient plusieurs (ex. OS MAR, STANDARD MAR, THORAX APNEE), un menu « Série CT » permet de changer ; seul le CT est rechargé (quelques secondes), la coupe courante est conservée. Les séries qui ne couvrent qu'une partie du TEP sont signalées « partiel ».
+- **MIP rotatif** : sur sa propre ligne, curseur d'angle (molette = 10° par cran) et bouton Lecture. Les images (tous les 10°, grille réduite ×2) sont calculées en arrière-plan après le chargement ; l'angle 0 est en pleine résolution. Règle et mesure auto fonctionnent sur le MIP à l'angle affiché.
+- **Liste des lésions** : un clic sur une ligne (ou Entrée) amène les trois coupes sur le pic de la lésion et pose un repère (anneau à centre vide) sur chaque vue.
+- **Patient** : cadre replié par défaut, lu dans les en-têtes DICOM (jamais enregistré ni journalisé).
+- **Organes** (approximatif) : poumons, cœur, foie, rate, reins, vessie, cerveau, squelette, par règles sur le CT et le TEP (`organs.py`), hors ligne. Les seuils HU ont été réglés sur un CT injecté ; un CT sans contraste ou un patient atypique peut donner de mauvais résultats.
+- **Export PDF** : les 3 coupes (avec mesures et, si activée, la surcouche d'organes), les infos patient et la liste des mesures. Le PDF contient l'identité du patient : ne le partagez pas sans précaution.
+- Le serveur n'écoute que sur 127.0.0.1 et refuse les requêtes dont l'hôte n'est pas local.
+
 ## Limites (à connaître)
 
 - Recherche / apprentissage uniquement, **pas un dispositif médical**.

@@ -1,6 +1,12 @@
 import pytest
 
-from viewer import demo, measure, render
+import http.client
+import json
+import threading
+import time
+from http.server import ThreadingHTTPServer
+
+from viewer import State, demo, make_handler, measure, render
 
 PNG = b"\x89PNG"
 
@@ -37,6 +43,97 @@ def test_measure_demo_lesion():
     assert 28 <= r["length_mm"] <= 36 and 28 <= r["width_mm"] <= 36 and r["suv_max"] == 9
 
 
+def test_measure_ct_and_missing_ct():
+    suv, spacing, ctv = demo()  # CT synthétique : ellipsoïde de 40 HU dans l'air (-1000)
+    r = measure(suv, spacing, "axial", 30, 0.5, 0.5, 50, ctv, "ct", 50)
+    assert r["hu_ref"] == 40 and r["length_mm"] > 100 and "error" not in r
+    assert measure(suv, spacing, "axial", 30, 0.5, 0.5, 50, None, "ct")["error"]
+
+
 def test_render_index_clipped():
     suv, *_ = demo()
     assert render(suv, "axial", 10_000, 10).startswith(PNG)
+
+
+def _server(state):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def _get(srv, path, host=None):
+    c = http.client.HTTPConnection("127.0.0.1", srv.server_port)
+    c.request("GET", path, headers={"Host": host or f"127.0.0.1:{srv.server_port}"})
+    r = c.getresponse()
+    return r.status, r.read()
+
+
+def test_routes_before_and_after_loading_and_host_check():
+    state = State()
+    srv = _server(state)
+    try:
+        assert json.loads(_get(srv, "/info")[1])["loaded"] is False
+        assert _get(srv, "/img?view=axial&i=0&vmax=10")[0] == 503
+        assert _get(srv, "/lesions?thr=2.5")[0] == 503
+        state.set(*demo())
+        assert json.loads(_get(srv, "/info")[1])["loaded"] is True
+        assert _get(srv, "/img?view=axial&i=3&vmax=10")[0] == 200
+        assert _get(srv, "/info", host="evil.example")[0] == 403  # anti DNS-rebinding
+        assert _get(srv, "/open?folder=/chemin/inexistant")[0] == 400
+    finally:
+        srv.shutdown()
+
+
+def test_invalid_folder_keeps_current_volume(tmp_path):
+    state = State()
+    state.set(*demo())
+    before = state.vol
+    assert state.open(str(tmp_path))  # dossier sans DICOM
+    for _ in range(100):
+        if state.status != "loading":
+            break
+        time.sleep(0.05)
+    assert state.status == "error" and "PET" in state.message
+    assert state.vol is before  # l'ancien volume reste affiché
+
+
+def test_render_with_organs_overlay_and_routes():
+    import numpy as np
+    suv, spacing, ctv = demo()
+    lab = np.zeros(suv.shape, np.uint8)
+    lab[20:40, 20:40, 20:40] = 3
+    plain, tinted = render(suv, "axial", 30, 10, ctv=ctv), render(suv, "axial", 30, 10, ctv=ctv, labels=lab)
+    assert tinted.startswith(PNG) and tinted != plain
+    assert render(suv, "mip", 0, 10, ctv=ctv, labels=lab) == render(suv, "mip", 0, 10, ctv=ctv)  # pas de surcouche sur la MIP
+    state = State()
+    state.set(suv, spacing, ctv)
+    srv = _server(state)
+    try:
+        assert json.loads(_get(srv, "/organs")[1])["status"] == "computing"
+        state.organs = (lab, {3: {"nom": "Cœur (approx.)", "couleur": "#ff4a4a", "volume_ml": 1.0, "suv_max": 1.0, "suv_mean": 1.0, "hu_mean": 1.0}})
+        assert json.loads(_get(srv, "/organs")[1])["organes"][0]["nom"] == "Cœur (approx.)"
+        assert json.loads(_get(srv, "/organ_at?view=axial&i=30&fx=0.4&fy=0.4")[1]) == {"nom": "Cœur (approx.)"}
+        assert json.loads(_get(srv, "/organ_at?view=axial&i=30&fx=0.02&fy=0.02")[1]) == {}
+        assert _get(srv, "/img?view=axial&i=30&vmax=10&organs=1")[0] == 200
+    finally:
+        srv.shutdown()
+
+
+def test_rotating_mip_frames_routes_and_measure():
+    suv, spacing, ctv = demo()
+    state = State()
+    state.set(suv, spacing, ctv)
+    for _ in range(200):  # calcul en arrière-plan
+        if state.mips is not None and len(state.mips) == 35:
+            break
+        time.sleep(0.05)
+    assert len(state.mips) == 35 and state.mip_frame(0) is None and state.mip_frame(94).shape == (60, 40)
+    srv = _server(state)
+    try:
+        assert json.loads(_get(srv, "/mips")[1]) == {"ready": 36, "total": 36}
+        assert _get(srv, "/img?view=mip&i=90&vmax=10")[0] == 200 and _get(srv, "/img?view=mip&i=0&vmax=10")[0] == 200
+        r = json.loads(_get(srv, "/measure?view=mip&i=90&fx=0.5&fy=0.5&pct=50")[1])
+        assert "error" not in r and r["length_mm"] > 0
+        assert _get(srv, "/ctseries?uid=inconnue")[0] == 400
+    finally:
+        srv.shutdown()

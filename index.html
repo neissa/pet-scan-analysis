@@ -1,48 +1,189 @@
 <!doctype html>
+<html lang="fr">
 <meta charset="utf-8">
+<meta name="color-scheme" content="dark">
 <title>Visionneuse TEP</title>
 <style>
-  body { font: 14px system-ui, sans-serif; background: #161616; color: #ddd; margin: 1rem; }
-  .views { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-  figure { margin: 0; }
-  figure:first-child { grid-column: span 2; } /* axial en grand */
-  .wrap { position: relative; line-height: 0; }
-  .wrap img { width: 100%; background: #fff; cursor: crosshair; }
+  /* Jetons (thème sombre permanent : l'interface s'efface devant l'image) */
+  :root {
+    --bg: #1c1c1e; --surface: #2c2c2e; --surface-2: #3a3a3c; --line: #48484a;
+    --label: #f5f5f7; --label-2: #aeaeb2; --label-3: #8e8e93;   /* 15:1, 7.7:1, 5.2:1 sur --bg */
+    --accent: #0b63ce; --accent-text: #64b5ff; --warn: #ff9f0a; --focus: #64b5ff;
+    --font: -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--label); font: 13px/1.4 var(--font); accent-color: #0a84ff; }
+  b, th { font-weight: 600; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+
+  /* Barre d'outils : dossier à gauche, outil au centre, action principale à droite */
+  .toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 16px; height: 52px; padding: 0 16px;
+             background: var(--surface); border-bottom: 1px solid var(--line); }
+  .tb-lead, .tb-trail { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 0; }
+  .tb-trail { justify-content: flex-end; }
+  #loadmsg { color: var(--warn); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
+  #folder { flex: 1 1 auto; min-width: 8rem; max-width: 34rem; }
+
+  button, select, input[type=text], input[type=number] { font: inherit; color: var(--label); min-height: 28px; border-radius: 6px;
+        border: 1px solid var(--line); background: var(--surface-2); padding: 3px 10px; }
+  input[type=text], input[type=number] { background: var(--bg); }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { background: #48484a; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }   /* blanc sur --accent : 6:1 */
+  button.primary:hover:not(:disabled) { background: #1a73e0; }
+  select { padding-right: 6px; }
+
+  /* Contrôle segmenté (outil) : 3 segments de largeur égale, un seul choix */
+  .seg { display: inline-flex; padding: 2px; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  .seg label { position: relative; }
+  .seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+  .seg span { display: block; min-width: 96px; text-align: center; line-height: 24px; padding: 0 10px; border-radius: 6px; color: var(--label-2); }
+  .seg input:hover + span { color: var(--label); }
+  .seg input:checked + span { background: var(--accent); color: #fff; font-weight: 600; }
+  .seg input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  /* Mise en page : vues à gauche, inspecteur à droite */
+  .app { display: grid; grid-template-columns: minmax(0, 1fr) 320px; height: calc(100% - 52px); }
+  main { overflow: auto; padding: 16px; }
+  .inspector { overflow: auto; border-left: 1px solid var(--line); background: var(--surface); padding: 4px 16px 24px; }
+
+  /* Vues : même hauteur affichée (--vh), largeur selon le rapport d'aspect physique de chaque image */
+  main { --vh: min(calc(100vh - 150px), calc((100vw - 320px - 32px - 36px) / 3.1)); }
+  .views, .miprow { display: flex; gap: 12px; align-items: flex-start; }
+  .miprow { margin-top: 20px; }            /* MIP rotatif sur sa propre ligne */
+  .miptools { display: flex; flex-direction: column; gap: 8px; max-width: 220px; align-self: center; }
+  .hint { color: var(--label-3); font-size: 12px; margin: 0; }
+  figure { position: relative; margin: 0; flex: 0 0 auto; }
+  figcaption { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 1px 8px; border-radius: 6px; font-size: 12px; color: var(--label-2);
+               background: rgba(28,28,30,.72); backdrop-filter: blur(8px); text-transform: capitalize; }
+  figcaption b { color: var(--label); font-variant-numeric: tabular-nums; }
+  .wrap { position: relative; line-height: 0; width: fit-content; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+  .wrap img { display: block; height: var(--vh); width: auto; background: #000; cursor: crosshair; }
   .wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  input[type=range] { width: 100%; }
-  .bar { display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; margin: 0 0 1rem; }
-  #res { color: #fc6; min-height: 1.4em; margin: 0 0 .5rem; white-space: pre-line; }
-  table { border-collapse: collapse; margin-top: 1rem; }
-  td, th { border: 1px solid #444; padding: 4px 10px; text-align: right; }
+  figure > input[type=range] { margin-top: 8px; }
+
+  /* Curseurs : natifs (accessibles au clavier), 28 px de zone utile */
+  input[type=range] { display: block; width: 100%; height: 28px; margin: 0; }
+
+  /* Inspecteur : sections repliables */
+  details.sec { border-bottom: 1px solid var(--line); padding: 10px 0; }
+  details.sec > summary { cursor: pointer; font-weight: 600; font-size: 13px; min-height: 28px; display: flex; align-items: center; list-style-position: inside; }
+  .row { display: grid; gap: 2px; margin: 8px 0; color: var(--label-2); }
+  .row > span { display: flex; justify-content: space-between; }
+  .row b { color: var(--label); font-variant-numeric: tabular-nums; }
+  .check { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0 4px; }
+  .cbar img { display: block; width: 100%; height: 12px; border-radius: 3px; }
+  .cbar div { display: flex; justify-content: space-between; color: var(--label-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #glob { display: block; margin-top: 8px; color: var(--label-2); }
+  #res { margin-top: 8px; color: #ffd60a; white-space: pre-line; font-size: 12px; min-height: 1.4em; font-variant-numeric: tabular-nums; }
+  .warn { color: var(--warn); font-size: 12px; margin: 4px 0; }
+  .note { color: var(--label-3); font-size: 12px; margin: 16px 0 0; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+  td, th { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); }
+  th { color: var(--label-2); }
+  td:first-child, th:first-child { text-align: left; }
+  tr.les { cursor: pointer; }
+  tr.les:hover td, tr.les:focus-visible td { background: var(--surface-2); }
+  #patientgrid { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0 0; }
+  #patientgrid dt { color: var(--label-3); } #patientgrid dd { margin: 0; overflow-wrap: anywhere; }
+
+  #tip { position: fixed; z-index: 11; pointer-events: none; padding: 2px 8px; border-radius: 6px; font-weight: 600;
+         background: rgba(28,28,30,.9); border: 1px solid var(--line); }
+  #loupe { position: fixed; z-index: 10; width: 160px; height: 160px; pointer-events: none;
+           border: 2px solid #fff; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.6); }
+
+  @media (prefers-contrast: more) { :root { --line: #8e8e93; --label-2: #d1d1d6; --label-3: #c7c7cc; } }
+  @media (max-width: 1000px) { .app { grid-template-columns: 1fr; height: auto; } .inspector { border-left: 0; } main { --vh: 60vh; } }
 </style>
 
-<div class="bar">
-  <label>Fenêtre SUV max <input id="vmax" type="range" min="1" max="30" step="0.5" value="10"> <b id="vmaxv">10</b></label>
-  <label>Seuil lésion <input id="thr" type="number" value="2.5" step="0.1" min="0" style="width:5em"></label>
-  <label>Palette <select id="cmap"><option>jet</option><option>hot</option><option value="gray_r">gris</option></select></label>
-  <label id="fz">Affichage <select id="mode"><option value="fusion">Fusion TEP+CT</option><option value="pet">TEP</option><option value="ct">CT</option></select>
-    Opacité TEP <input id="alpha" type="range" min="0.1" max="1" step="0.05" value="0.6" style="width:100px"></label>
-  <span id="glob"></span>
+<header class="toolbar">
+  <div class="tb-lead">
+    <input id="folder" type="text" list="recent" placeholder="Dossier DICOM (TEP + CT)" aria-label="Dossier DICOM">
+    <datalist id="recent"></datalist>
+    <button id="open">Ouvrir</button>
+    <button id="browse" hidden>Parcourir…</button>
+  </div>
+  <div class="seg" role="radiogroup" aria-label="Outil">
+    <label title="Un clic positionne les autres coupes"><input type="radio" name="tool" value="nav" checked><span>Naviguer</span></label>
+    <label title="Un clic, le trait suit la souris, un 2e clic le fige (Échap annule)"><input type="radio" name="tool" value="ruler"><span>Règle</span></label>
+    <label title="Un clic sur une structure : plus grande dimension et dimension perpendiculaire"><input type="radio" name="tool" value="auto"><span>Mesure auto</span></label>
+  </div>
+  <div class="tb-trail">
+    <span id="loadmsg" role="status"></span>
+    <button id="pdf" class="primary">Exporter PDF</button>
+  </div>
+</header>
+
+<div class="app">
+  <main>
+    <div class="views" id="views"></div>
+    <section class="miprow" id="miprow" aria-label="MIP rotatif"></section>
+  </main>
+
+  <aside class="inspector" aria-label="Réglages et résultats">
+    <details class="sec" open>
+      <summary>Affichage</summary>
+      <div id="fz">
+        <label class="row"><span>Mode</span>
+          <select id="mode"><option value="fusion">Fusion TEP + CT</option><option value="pet">TEP</option><option value="ct">CT</option></select></label>
+        <label class="row" id="ctbox" hidden><span>Série CT</span><select id="ctsel"></select></label>
+        <label class="row"><span>Opacité du TEP</span>
+          <input id="alpha" type="range" min="0.1" max="1" step="0.05" value="0.6"></label>
+      </div>
+      <label class="row"><span>Palette</span>
+        <select id="cmap"><option>jet</option><option>hot</option><option value="gray_r">gris</option></select></label>
+      <label class="row"><span>Fenêtre SUV max <b id="vmaxv">10</b></span>
+        <input id="vmax" type="range" min="1" max="30" step="0.5" value="10"></label>
+      <div class="cbar"><img id="bar" alt="Échelle de couleur SUV"><div><span>SUV 0</span><span id="barmax">10</span></div></div>
+      <span id="glob"></span>
+    </details>
+
+    <details class="sec" open>
+      <summary>Mesures</summary>
+      <label class="row" id="srcbox"><span>Mesure auto sur</span>
+        <select id="src"><option value="pet">TEP</option><option value="ct">CT</option></select></label>
+      <label class="row" id="pctbox" title="Molette pour ajuster"><span>Région <span><b id="pctv">50</b> % du max local</span></span>
+        <input id="pct" type="range" min="1" max="100" step="1" value="50"></label>
+      <label class="row" id="tolbox" title="Molette pour ajuster" hidden><span>Tolérance <span>± <b id="tolv">50</b> HU</span></span>
+        <input id="tol" type="range" min="5" max="300" step="5" value="50"></label>
+      <div class="btns"><button id="reset">Réinitialiser le zoom</button><button id="clear">Effacer les mesures</button></div>
+      <div id="res"></div>
+    </details>
+
+    <details class="sec">
+      <summary>Organes</summary>
+      <label class="check" id="orgbox" title="Identification approximative, calculée en arrière-plan après le chargement">
+        <input type="checkbox" id="orgs" disabled> <span>Superposer les organes</span> <span id="orgmsg" style="color: var(--label-3)"></span></label>
+      <div id="organs" hidden>
+        <table id="orgtbl"></table>
+        <p class="warn">Approximatif — recherche, pas un dispositif médical.</p>
+      </div>
+    </details>
+
+    <details class="sec" id="patient" hidden>
+      <summary>Patient</summary>
+      <dl id="patientgrid"></dl>
+    </details>
+
+    <details class="sec">
+      <summary>Lésions</summary>
+      <label class="row"><span>Seuil de détection (SUV)</span>
+        <input id="thr" type="number" value="2.5" step="0.1" min="0"></label>
+      <table id="tbl"></table>
+    </details>
+
+    <p class="note">Recherche uniquement, pas un dispositif médical. Molette sur une image : zoom centré sur la souris ;
+      molette sur un curseur : ajuste sa valeur (Maj = ×10). Une loupe ×4 suit la souris avec la règle et la mesure auto.</p>
+  </aside>
 </div>
-<div class="bar">
-  <span>SUV 0</span><img id="bar" style="width:300px;height:14px"><span id="barmax">10</span>
-  <span>
-    Outil :
-    <label><input type="radio" name="tool" value="nav" checked> Naviguer</label>
-    <label><input type="radio" name="tool" value="ruler"> Règle (2 clics)</label>
-    <label><input type="radio" name="tool" value="auto"> Mesure auto</label>
-  </span>
-  <label id="pctbox" title="Molette pour ajuster">Région = <b id="pctv">50</b> % du max local
-    <input id="pct" type="range" min="1" max="100" step="1" value="50" style="width:160px"></label>
-  <button id="reset">Réinitialiser le zoom</button>
-  <button id="clear">Effacer les mesures</button>
-</div>
-<div id="res"></div>
-<div class="views" id="views"></div>
-<table id="tbl"></table>
-<p style="color:#888">Recherche uniquement, pas un dispositif médical. Molette sur une image = zoom centré sur la souris ;
-  molette sur le curseur « Région » = seuil de la mesure auto, recalculé en direct sur toutes les mesures auto.
-  Naviguer : un clic positionne les autres coupes. Mesure auto : sur le TEP, dans la coupe affichée.</p>
+
+<div id="tip" hidden></div>
+<canvas id="loupe" width="160" height="160" hidden></canvas>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -50,12 +191,14 @@ const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const views = [["axial", 0], ["coronal", 1], ["sagittal", 2], ["mip", null]];
 const ROWCOL = { axial: [1, 2], coronal: [0, 2], sagittal: [0, 1], mip: [0, 2] };  // axes (ligne, colonne) de [z, y, x]
 const sliders = {}, zoom = {};
-const ms = [];  // mesures : {v, i, kind: "ruler"|"auto", items, text, X, Y (auto : point cliqué, fractions de l'image entière)}
-let shape, spacing, pending = null;  // pending : 1er point de la règle {v, i, a}
+const ms = [];  // mesures : {v, i, kind: "ruler"|"auto", source, items, text, X, Y (auto : point cliqué, fractions de l'image entière)}
+let shape, spacing, pending = null;  // pending : 1er point de la règle {v, i, a, cur}
+let lastMove = null;                 // dernière position souris {v, x, y} pour la loupe
 
 const cur = v => sliders[v] ? +sliders[v].value : 0;
 const tool = () => document.querySelector("input[name=tool]:checked").value;
 const mmSize = v => { const [r, c] = ROWCOL[v]; return [shape[c] * spacing[c], shape[r] * spacing[r]]; };  // [largeur, hauteur] mm
+const mmDist = (v, a, b) => { const [W, H] = mmSize(v); return Math.hypot((b[0] - a[0]) * W, (b[1] - a[1]) * H); };
 // fractions de l'image affichée (zoomée) <-> fractions de l'image entière
 const toFull = (v, fx, fy) => [zoom[v].x0 + fx / zoom[v].z, zoom[v].y0 + fy / zoom[v].z];
 const toView = (v, X, Y) => [(X - zoom[v].x0) * zoom[v].z, (Y - zoom[v].y0) * zoom[v].z];
@@ -74,10 +217,10 @@ function pick(view, X, Y) {
 }
 
 function refreshView(v) {
-  if (sliders[v]) $("n-" + v).textContent = `${cur(v) + 1} / ${+sliders[v].max + 1}`;
+  if (sliders[v]) $("n-" + v).textContent = v === "mip" ? `${cur(v)}°` : `${cur(v) + 1} / ${+sliders[v].max + 1}`;
   const z = zoom[v];
   $("img-" + v).src = `/img?view=${v}&i=${cur(v)}&vmax=${$("vmax").value}&cmap=${$("cmap").value}` +
-    `&mode=${$("mode").value}&alpha=${$("alpha").value}&z=${z.z}&x0=${z.x0}&y0=${z.y0}`;
+    `&mode=${$("mode").value}&alpha=${$("alpha").value}&z=${z.z}&x0=${z.x0}&y0=${z.y0}&organs=${$("orgs").checked ? 1 : 0}`;
 }
 
 function refresh() {
@@ -89,6 +232,7 @@ function refresh() {
 // --- surcouche de mesures (chacune n'est visible que sur la coupe où elle a été faite) ---
 function draw(v) {
   const img = $("img-" + v), c = $("cv-" + v);
+  if (!img || !c) return;
   c.width = img.clientWidth; c.height = img.clientHeight;
   const g = c.getContext("2d"), P = ([X, Y]) => { const [a, b] = toView(v, X, Y); return [a * c.width, b * c.height]; };
   g.font = "bold 13px system-ui"; g.lineWidth = 2;
@@ -100,34 +244,69 @@ function draw(v) {
     g.fillStyle = color; g.fillText(text, lx + 4, ly + 13);
   };
   const dot = (pt, color) => { const [x, y] = P(pt); g.fillStyle = color; g.beginPath(); g.arc(x, y, 3, 0, 7); g.fill(); };
+  // petites barres perpendiculaires aux deux extrémités (repères de règle)
+  const bars = (a, b, color) => {
+    const [ax, ay] = P(a), [bx, by] = P(b), dx = bx - ax, dy = by - ay, d = Math.hypot(dx, dy) || 1, nx = -dy / d * 7, ny = dx / d * 7;
+    g.strokeStyle = color; g.beginPath();
+    for (const [x, y] of [[ax, ay], [bx, by]]) { g.moveTo(x - nx, y - ny); g.lineTo(x + nx, y + ny); }
+    g.stroke();
+  };
   const items = [];
-  if (pending && pending.v === v && pending.i === cur(v)) items.push({ t: "dot", p: pending.a, color: "#0f0" });
-  for (const m of ms) if (m.v === v && (v === "mip" || m.i === cur(v))) items.push(...m.items);
+  if (pending && pending.v === v && pending.i === cur(v)) {
+    items.push({ t: "dot", p: pending.a, color: "#0f0" });
+    if (pending.cur) items.push({ t: "line", a: pending.a, b: pending.cur, color: "#0f0", bars: true, text: mmDist(v, pending.a, pending.cur).toFixed(1) + " mm" });
+  }
+  for (const m of ms) if (m.v === v && m.i === cur(v)) items.push(...m.items);  // pour le MIP, « i » est l'angle
   for (const it of items) {
     if (it.t === "dots") { g.fillStyle = it.color; for (const p of it.pts) { const [x, y] = P(p); g.fillRect(x - 1, y - 1, 2, 2); } }
     else if (it.t === "dot") dot(it.p, it.color);
     else {
       g.strokeStyle = it.color; g.beginPath(); g.moveTo(...P(it.a)); g.lineTo(...P(it.b)); g.stroke();
+      if (it.bars) bars(it.a, it.b, it.color);
       dot(it.a, it.color); dot(it.b, it.color);
       label(it.b, it.a, it.text, it.color);
     }
   }
+  drawMarker(v, g, P);
 }
 
-// (Re)calcule une mesure auto avec le % de région courant.
+// --- loupe ×4 : zone sous le curseur agrandie, viseur à centre vide ---
+function updateLoupe() {
+  const L = $("loupe"), m = lastMove;
+  const img = m && $("img-" + m.v), c = m && $("cv-" + m.v);
+  if (!m || !img || tool() === "nav" || !img.naturalWidth || !c.width) { L.hidden = true; return; }
+  const r = img.getBoundingClientRect(), S = 160, Z = 4, w = S / Z, k = img.naturalWidth / r.width;
+  const cx = m.x - r.left, cy = m.y - r.top, g = L.getContext("2d");
+  g.fillStyle = "#000"; g.fillRect(0, 0, S, S);
+  g.drawImage(img, (cx - w / 2) * k, (cy - w / 2) * k, w * k, w * k, 0, 0, S, S);
+  g.drawImage(c, cx - w / 2, cy - w / 2, w, w, 0, 0, S, S);  // mesures par-dessus
+  const mid = S / 2;
+  for (const [col, lw] of [["#000", 4], ["#fff", 2]]) {  // viseur : 4 branches et un anneau, centre vide
+    g.strokeStyle = col; g.lineWidth = lw; g.beginPath();
+    g.arc(mid, mid, 11, 0, 7);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { g.moveTo(mid + dx * 11, mid + dy * 11); g.lineTo(mid + dx * 30, mid + dy * 30); }
+    g.stroke();
+  }
+  L.style.left = (m.x + 24 + S > innerWidth ? m.x - 24 - S : m.x + 24) + "px";
+  L.style.top = (m.y + 24 + S > innerHeight ? m.y - 24 - S : m.y + 24) + "px";
+  L.hidden = false;
+}
+
+// (Re)calcule une mesure auto avec les réglages courants : % de région (TEP) ou tolérance HU (CT).
 async function fetchAuto(m) {
-  const tag = `Auto ${m.v} ${m.i + 1}`;
-  const r = await (await fetch(`/measure?view=${m.v}&i=${m.i}&fx=${m.X}&fy=${m.Y}&pct=${$("pct").value}`)).json();
+  const ct = m.source === "ct", tag = `Auto ${ct ? "CT " : ""}${m.v} ${m.i + 1}`;
+  const r = await (await fetch(`/measure?view=${m.v}&i=${m.i}&fx=${m.X}&fy=${m.Y}&source=${m.source}&pct=${$("pct").value}&tol=${$("tol").value}`)).json();
   if (r.error) { m.items = []; m.text = `${tag} : ${r.error}`; return; }
   m.items = [
     { t: "dots", pts: r.boundary, color: "rgba(255,255,0,.8)" },
     { t: "line", a: r.axes[0], b: r.axes[1], color: "#0ff", text: "Longueur " + r.length_mm.toFixed(1) + " mm" },
     { t: "line", a: r.perp[0], b: r.perp[1], color: "#f0f", text: "Largeur " + r.width_mm.toFixed(1) + " mm" }];
-  m.text = `${tag} : longueur ${r.length_mm.toFixed(1)} mm × largeur ${r.width_mm.toFixed(1)} mm — ` +
-    `SUVmax ${r.suv_max.toFixed(2)}, SUVmean ${r.suv_mean.toFixed(2)}, aire ${(r.area_mm2 / 100).toFixed(2)} cm²`;
+  const stats = ct ? `HU moyen ${r.hu_mean.toFixed(0)}, aire ${(r.area_mm2 / 100).toFixed(2)} cm²`
+                   : `SUVmax ${r.suv_max.toFixed(2)}, SUVmean ${r.suv_mean.toFixed(2)}, aire ${(r.area_mm2 / 100).toFixed(2)} cm²`;
+  m.text = `${tag} : longueur ${r.length_mm.toFixed(1)} mm × largeur ${r.width_mm.toFixed(1)} mm — ${stats}`;
 }
 
-// Temps réel : si le curseur bouge pendant un calcul, on en relance un seul après (pas de file d'attente).
+// Temps réel : si un curseur bouge pendant un calcul, on en relance un seul après (pas de file d'attente).
 let busy = false, again = false;
 async function remeasure() {
   if (busy) { again = true; return; }
@@ -144,43 +323,159 @@ async function onClick(v, fx, fy) {
   const [X, Y] = toFull(v, fx, fy), t = tool();
   if (t === "nav") return pick(v, X, Y);
   if (t === "ruler") {
-    if (!pending || pending.v !== v || pending.i !== cur(v)) { pending = { v, i: cur(v), a: [X, Y] }; showRes("Règle : cliquez le 2e point"); return draw(v); }
-    const [W, H] = mmSize(v), d = Math.hypot((X - pending.a[0]) * W, (Y - pending.a[1]) * H);
+    if (!pending || pending.v !== v || pending.i !== cur(v)) { pending = { v, i: cur(v), a: [X, Y], cur: [X, Y] }; showRes("Règle : cliquez le 2e point"); return draw(v); }
+    const d = mmDist(v, pending.a, [X, Y]);
     ms.push({ v, i: cur(v), kind: "ruler", text: `Règle ${v} ${cur(v) + 1} : ${d.toFixed(1)} mm`,
-              items: [{ t: "line", a: pending.a, b: [X, Y], color: "#0f0", text: d.toFixed(1) + " mm" }] });
+              items: [{ t: "line", a: pending.a, b: [X, Y], color: "#0f0", bars: true, text: d.toFixed(1) + " mm" }] });
     pending = null;
     showRes();
     return draw(v);
   }
-  const m = { v, i: cur(v), kind: "auto", X, Y, items: [], text: "" };
+  const m = { v, i: cur(v), kind: "auto", source: v === "mip" ? "pet" : $("src").value, X, Y, items: [], text: "" };
   await fetchAuto(m);
   ms.push(m);
   showRes(); draw(v);
 }
 
+// Liste des lésions : un clic sur une ligne (ou Entrée) amène les 3 coupes sur le pic de la lésion et pose un repère.
+let lesionList = [], marker = null;  // marker = {z, y, x} (indices de voxel)
 async function lesions() {
-  const r = await (await fetch("/lesions?thr=" + $("thr").value)).json();
+  lesionList = await (await fetch("/lesions?thr=" + $("thr").value)).json();
   $("tbl").innerHTML = "<tr><th>#</th><th>SUVmax</th><th>SUVmean</th><th>MTV ml</th><th>TLG</th></tr>" +
-    r.map((l, i) => `<tr><td>${i + 1}</td><td>${l.suv_max.toFixed(2)}</td><td>${l.suv_mean.toFixed(2)}</td><td>${l.mtv_ml.toFixed(1)}</td><td>${l.tlg.toFixed(1)}</td></tr>`).join("");
+    lesionList.map((l, i) => `<tr class="les" data-i="${i}" tabindex="0" title="Aller à cette lésion"><td>${i + 1}</td><td>${l.suv_max.toFixed(2)}</td>` +
+      `<td>${l.suv_mean.toFixed(2)}</td><td>${l.mtv_ml.toFixed(1)}</td><td>${l.tlg.toFixed(1)}</td></tr>`).join("");
+  for (const tr of $("tbl").querySelectorAll("tr.les")) {
+    tr.onclick = () => gotoLesion(lesionList[tr.dataset.i]);
+    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(); } };
+  }
 }
 
-(async () => {
+function gotoLesion(l) {
+  const [z, y, x] = l.peak, [nz, ny, nx] = shape;
+  marker = { z, y, x };
+  sliders.axial.value = z; sliders.coronal.value = y; sliders.sagittal.value = x;
+  if (sliders.mip) sliders.mip.value = 0;  // le repère n'a de sens que sur le MIP de face
+  // vues zoomées : on recentre sur la lésion pour qu'elle reste visible
+  const at = { axial: [(x + .5) / nx, (y + .5) / ny], coronal: [(x + .5) / nx, 1 - (z + .5) / nz],
+               sagittal: [(y + .5) / ny, 1 - (z + .5) / nz], mip: [(x + .5) / nx, 1 - (z + .5) / nz] };
+  for (const [v] of views) {
+    const s = zoom[v], w = 1 / s.z;
+    if (s.z > 1) zoom[v] = { z: s.z, x0: clamp(at[v][0] - w / 2, 0, 1 - w), y0: clamp(at[v][1] - w / 2, 0, 1 - w) };
+  }
+  refresh();
+}
+
+// Position du repère (fractions de l'image entière) sur une vue, ou null s'il est hors de la coupe affichée.
+function markerPos(v) {
+  if (!marker) return null;
+  const [nz, ny, nx] = shape, { z, y, x } = marker;
+  if (v === "axial") return Math.abs(cur(v) - z) <= 1 ? [(x + .5) / nx, (y + .5) / ny] : null;
+  if (v === "coronal") return Math.abs(cur(v) - y) <= 1 ? [(x + .5) / nx, 1 - (z + .5) / nz] : null;
+  if (v === "sagittal") return Math.abs(cur(v) - x) <= 1 ? [(y + .5) / ny, 1 - (z + .5) / nz] : null;
+  return !sliders.mip || cur("mip") === 0 ? [(x + .5) / nx, 1 - (z + .5) / nz] : null;
+}
+
+// Repère de localisation : anneau à centre vide et 4 branches, deux traits (noir puis couleur) pour rester visible sur tout fond.
+function drawMarker(v, g, P) {
+  const p = markerPos(v);
+  if (!p) return;
+  const [x, y] = P(p);
+  for (const [col, lw] of [["#000", 5], ["#ff375f", 2.5]]) {
+    g.strokeStyle = col; g.lineWidth = lw; g.beginPath();
+    g.arc(x, y, 12, 0, 7);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { g.moveTo(x + dx * 12, y + dy * 12); g.lineTo(x + dx * 26, y + dy * 26); }
+    g.stroke();
+  }
+}
+
+// --- dossier de travail : choix, chargement en arrière-plan, reconstruction de la page ---
+async function openFolder() {
+  const f = $("folder").value.trim();
+  if (!f) return;
+  const r = await (await fetch("/open?folder=" + encodeURIComponent(f))).json();
+  if (r.error) { $("loadmsg").textContent = r.error; return; }
+  watch();
+}
+
+// Suit un chargement en cours ; à la fin, reconstruit la page (en cas d'erreur l'ancien volume reste affiché).
+async function watch(rebuild = true) {
+  for (;;) {
+    const s = await (await fetch("/status")).json();
+    if (s.message) $("loadmsg").textContent = s.message;
+    if (s.status !== "loading") return s.status === "ready" ? (rebuild ? start() : afterCt()) : undefined;
+    await new Promise(r => setTimeout(r, 700));
+  }
+}
+
+async function start() {
   const info = await (await fetch("/info")).json();
+  $("browse").hidden = !info.browse;
+  $("recent").innerHTML = (info.recent || []).map(f => `<option value="${f.replace(/"/g, "&quot;")}">`).join("");
+  if (!info.loaded) { $("loadmsg").textContent = "Choisissez un dossier DICOM (TEP + CT)."; return watch(); }
+  $("folder").value = info.folder || "";
+  await build(info);
+}
+
+// Patient : cadre replié par défaut (l'identité ne s'affiche pas d'office) ; masqué s'il n'y a rien (démo).
+async function loadPatient() {
+  const p = await (await fetch("/patient")).json();
+  window.patientInfo = p;
+  const keys = Object.keys(p);
+  $("patient").hidden = !keys.length;
+  $("patient").open = false;
+  $("patientgrid").replaceChildren(...keys.flatMap(k => {
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = k; dd.textContent = p[k];  // textContent : jamais d'injection HTML depuis le DICOM
+    return [dt, dd];
+  }));
+}
+
+async function build(info) {
   $("glob").textContent = "SUVmax global : " + info.suv_max.toFixed(2);
   shape = info.shape; spacing = info.spacing;
-  $("views").innerHTML = views.map(([v]) =>
-    `<figure><figcaption>${v} <b id="n-${v}"></b></figcaption>` +
-    `<div class="wrap"><img id="img-${v}"><canvas id="cv-${v}"></canvas></div>` +
-    (v === "mip" ? "" : `<input type="range" id="s-${v}">`) + "</figure>").join("");
-  if (!info.ct) { $("mode").value = "pet"; $("fz").hidden = true; }  // pas de CT dans le dossier
+  ms.length = 0; pending = null; lastMove = null; marker = null; showRes();
+  if (playTimer) { clearInterval(playTimer); playTimer = 0; }
+  const fig = v => `<figure><figcaption>${v} <b id="n-${v}"></b></figcaption>` +
+    `<div class="wrap"><img id="img-${v}"><canvas id="cv-${v}"></canvas></div><input type="range" id="s-${v}"></figure>`;
+  $("views").innerHTML = ["axial", "coronal", "sagittal"].map(fig).join("");
+  $("miprow").innerHTML = fig("mip") + `<div class="miptools"><button id="play" disabled>Lecture</button>` +
+    `<p class="hint">Le curseur d'angle (ou sa molette, 10° par cran) fait tourner le MIP autour de l'axe vertical.</p></div>`;
+  $("play").onclick = togglePlay;
+  // série CT : liste des séries du dossier (texte via Option : jamais d'HTML venu du DICOM)
+  const cs = info.ct_series || [];
+  $("ctbox").hidden = cs.length < 2;
+  $("ctsel").replaceChildren(...cs.map(c => new Option(`${c.desc} · ${c.n} coupes` +
+    (c.couverture < 0.9 ? ` · partiel (${Math.round(c.couverture * 100)} %)` : ""), c.uid)));
+  if (info.ct_uid) $("ctsel").value = info.ct_uid;
+  $("fz").hidden = !info.ct;  // pas de CT dans le dossier : pas de fusion, de mesure CT ni d'organes
+  $("orgbox").hidden = !info.ct;
+  $("srcbox").hidden = !info.ct;
+  $("mode").value = info.ct ? "fusion" : "pet";
+  $("src").value = "pet";
+  syncSrc();
   for (const [v, ax] of views) {
     zoom[v] = { z: 1, x0: 0, y0: 0 };
     const img = $("img-" + v);
-    img.onload = () => draw(v);
+    let raf = 0;
+    img.onload = () => { draw(v); updateLoupe(); };
     img.onclick = e => {
       const r = img.getBoundingClientRect();
       onClick(v, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
     };
+    // trait de la règle et loupe suivent la souris (une image par frame)
+    img.onmousemove = e => {
+      lastMove = { v, x: e.clientX, y: e.clientY };
+      organTip(v, e.clientX, e.clientY);
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const r = img.getBoundingClientRect();
+        if (pending && pending.v === v && pending.i === cur(v) && lastMove)
+          pending.cur = toFull(v, (lastMove.x - r.left) / r.width, (lastMove.y - r.top) / r.height);
+        draw(v); updateLoupe();
+      });
+    };
+    img.onmouseleave = () => { lastMove = null; updateLoupe(); $("tip").hidden = true; };
     // zoom centré sur la souris : le point sous le curseur reste fixe
     img.addEventListener("wheel", e => {
       e.preventDefault();
@@ -190,27 +485,137 @@ async function lesions() {
       zoom[v] = { z: z2, x0: clamp(X - mx * w, 0, 1 - w), y0: clamp(Y - my * w, 0, 1 - w) };
       refreshView(v);
     }, { passive: false });
+    const s = sliders[v] = $("s-" + v);
     if (ax !== null) {
-      const s = sliders[v] = $("s-" + v);
       s.max = info.shape[ax] - 1;
       s.value = Math.floor(info.shape[ax] / 2);
-      s.oninput = () => refreshView(v);
+    } else {  // MIP : le curseur est l'angle de rotation, de 0 à 350° par pas de 10°
+      s.min = 0; s.max = 350; s.step = 10; s.value = 0;
     }
+    s.oninput = () => refreshView(v);
   }
-  $("vmax").oninput = $("cmap").onchange = $("mode").onchange = $("alpha").oninput = refresh;
-  $("thr").onchange = lesions;
-  $("pct").oninput = () => { $("pctv").textContent = $("pct").value; remeasure(); };
-  // molette sur le curseur « Région » : ±1 %
-  $("pctbox").addEventListener("wheel", e => {
-    e.preventDefault();
-    $("pct").value = clamp(+$("pct").value + (e.deltaY < 0 ? 1 : -1), 1, 100);
-    $("pct").oninput();
-  }, { passive: false });
-  $("reset").onclick = () => { for (const [v] of views) zoom[v] = { z: 1, x0: 0, y0: 0 }; refresh(); };
-  $("clear").onclick = () => { ms.length = 0; pending = null; showRes(); drawAll(); };
-  document.querySelectorAll("input[name=tool]").forEach(r => r.onchange = () => { pending = null; showRes(); drawAll(); });
-  document.addEventListener("keydown", e => { if (e.key === "Escape") { pending = null; showRes(); drawAll(); } });
   refresh();
   lesions();
-})();
+  loadPatient();
+  watchOrgans();
+  watchMips();
+}
+
+// MIP rotatif : le serveur calcule les images (tous les 10°) en arrière-plan ; lecture et curseur s'activent quand tout est prêt.
+let mipToken = 0, playTimer = 0;
+async function watchMips() {
+  const my = ++mipToken, play = $("play"), s = sliders.mip;
+  s.disabled = true; play.disabled = true; play.textContent = "Calcul du MIP…";
+  for (let k = 0; k < 300 && my === mipToken; k++) {
+    const r = await (await fetch("/mips")).json();
+    if (r.ready >= r.total) { s.disabled = false; play.disabled = false; play.textContent = playTimer ? "Pause" : "Lecture"; return; }
+    play.textContent = `Calcul du MIP… ${Math.round(100 * r.ready / r.total)} %`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+function togglePlay() {
+  const play = $("play");
+  if (playTimer) { clearInterval(playTimer); playTimer = 0; play.textContent = "Lecture"; return; }
+  play.textContent = "Pause";
+  playTimer = setInterval(() => { const s = sliders.mip; s.value = (+s.value + 10) % 360; refreshView("mip"); }, 150);
+}
+
+// Après un changement de série CT : mêmes coupes, nouvelle image, organes et mesures CT recalculés.
+function afterCt() { $("loadmsg").textContent = ""; refresh(); watchOrgans(); remeasure(); }
+
+// Organes : calculés par le serveur en arrière-plan ; la case s'active quand c'est prêt, avec légende et tableau.
+let orgToken = 0;
+async function watchOrgans() {
+  const my = ++orgToken, box = $("orgs");
+  box.checked = false; box.disabled = true; $("organs").hidden = true; $("tip").hidden = true;
+  for (let k = 0; k < 180 && my === orgToken; k++) {
+    const r = await (await fetch("/organs")).json();
+    if (r.status === "unavailable") { $("orgbox").hidden = true; return; }
+    if (r.status === "ready") {
+      $("orgmsg").textContent = "";
+      $("orgtbl").innerHTML = "<tr><th style='text-align:left'>Organe</th><th>Volume ml</th><th>SUVmax</th><th>SUVmean</th><th>HU moyen</th></tr>" +
+        r.organes.map(o => `<tr><td style="text-align:left"><span style="color:${o.couleur}">■</span> ${o.nom}</td><td>${o.volume_ml.toFixed(0)}</td>` +
+                           `<td>${o.suv_max.toFixed(1)}</td><td>${o.suv_mean.toFixed(1)}</td><td>${o.hu_mean.toFixed(0)}</td></tr>`).join("");
+      $("organs").hidden = false; box.disabled = false;
+      return;
+    }
+    $("orgmsg").textContent = "(calcul…)";
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
+// Nom de l'organe sous la souris (si la surcouche est active) ; une requête à la fois.
+let tipBusy = false;
+async function organTip(v, x, y) {
+  const tip = $("tip");
+  if (!$("orgs").checked) { tip.hidden = true; return; }
+  if (tipBusy) return;
+  tipBusy = true;
+  const r = $("img-" + v).getBoundingClientRect(), [X, Y] = toFull(v, (x - r.left) / r.width, (y - r.top) / r.height);
+  try {
+    const o = await (await fetch(`/organ_at?view=${v}&i=${cur(v)}&fx=${X}&fy=${Y}`)).json();
+    tip.hidden = !o.nom || v === "mip"; tip.textContent = o.nom || "";
+    tip.style.left = (x + 14) + "px"; tip.style.top = (y + 14) + "px";
+  } finally { tipBusy = false; }
+}
+
+// Source de mesure : « Région % » pour le TEP, « Tolérance HU » pour le CT.
+function syncSrc() {
+  const ct = $("src").value === "ct";
+  $("pctbox").hidden = ct; $("tolbox").hidden = !ct;
+}
+
+// Molette sur n'importe quel curseur (ou son libellé) : ±1 step, Maj = ×10, puis événement « input » (les oninput suivent).
+// Molette vers le haut = valeur suivante (+1 coupe pour les curseurs de coupe).
+document.addEventListener("wheel", e => {
+  const t = e.target.type === "range" ? e.target : e.target.closest && e.target.closest("label")?.querySelector("input[type=range]");
+  if (!t || t.disabled) return;  // sur une image, la molette zoome (gestionnaire propre à l'image)
+  e.preventDefault();
+  t.value = clamp(+t.value + (e.deltaY < 0 ? 1 : -1) * (+t.step || 1) * (e.shiftKey ? 10 : 1), +t.min, +t.max);
+  t.dispatchEvent(new Event("input", { bubbles: true }));
+}, { passive: false });
+
+// Réglages statiques (créés une seule fois)
+$("vmax").oninput = $("cmap").onchange = $("alpha").oninput = refresh;
+$("mode").onchange = () => { if ($("mode").value === "ct" && !$("srcbox").hidden) $("src").value = "ct"; syncSrc(); refresh(); };
+$("src").onchange = syncSrc;
+$("orgs").onchange = refresh;
+$("ctsel").onchange = async () => {  // autre série CT : rechargement du seul CT en arrière-plan (quelques secondes)
+  const r = await (await fetch("/ctseries?uid=" + encodeURIComponent($("ctsel").value))).json();
+  if (r.error) { $("loadmsg").textContent = r.error; return; }
+  watch(false);
+};
+$("thr").onchange = lesions;
+$("pct").oninput = () => { $("pctv").textContent = $("pct").value; remeasure(); };
+$("tol").oninput = () => { $("tolv").textContent = $("tol").value; remeasure(); };
+$("open").onclick = openFolder;
+$("folder").onkeydown = e => { if (e.key === "Enter") openFolder(); };
+$("browse").onclick = async () => {
+  const r = await (await fetch("/browse")).json();
+  if (r.folder) { $("folder").value = r.folder; openFolder(); }
+};
+// Export PDF : envoie l'état de l'écran (3 coupes, zoom, réglages, mesures, infos patient) ; le serveur refait le rendu.
+$("pdf").onclick = async () => {
+  const state = {
+    views: ["axial", "coronal", "sagittal"].map(v => ({ view: v, i: cur(v), z: zoom[v].z, x0: zoom[v].x0, y0: zoom[v].y0 })),
+    vmax: +$("vmax").value, cmap: $("cmap").value, mode: $("mode").value, alpha: +$("alpha").value, organs: $("orgs").checked,
+    measures: ms.map(m => ({ v: m.v, i: m.i, text: m.text, items: m.items })),
+  };
+  $("pdf").disabled = true;
+  try {
+    const r = await fetch("/export.pdf", { method: "POST", headers: { "Content-Type": "application/json" },
+                                           body: JSON.stringify({ state, patient: window.patientInfo || {} }) });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const a = document.createElement("a"), d = new Date(), p = n => String(n).padStart(2, "0");
+    a.href = URL.createObjectURL(await r.blob());
+    a.download = `tep-ct-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.pdf`;
+    a.click(); URL.revokeObjectURL(a.href);
+  } catch (e) { $("loadmsg").textContent = "Export PDF impossible : " + e.message; }
+  $("pdf").disabled = false;
+};
+$("reset").onclick = () => { for (const [v] of views) zoom[v] = { z: 1, x0: 0, y0: 0 }; refresh(); };
+$("clear").onclick = () => { ms.length = 0; pending = null; marker = null; showRes(); drawAll(); };
+document.querySelectorAll("input[name=tool]").forEach(r => r.onchange = () => { pending = null; showRes(); drawAll(); updateLoupe(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { pending = null; showRes(); drawAll(); } });
+start();
 </script>
