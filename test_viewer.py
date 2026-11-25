@@ -161,3 +161,40 @@ def test_compare_modes_lesions_status_and_measure():
         assert _get(srv, "/compare?folder=/dossier/inexistant")[0] == 400
     finally:
         srv.shutdown()
+
+
+def test_manual_offsets_slice_semantics_lesions_and_routes():
+    import numpy as np
+    from compare import shift_volume
+    from viewer import _add_b, _slice_off
+    rng = np.random.default_rng(1)
+    vol = rng.random((12, 20, 24)).astype(np.float32)
+    off = (2, -3, 4)
+    for view, i in (("axial", 5), ("coronal", 9), ("sagittal", 11)):  # même convention que shift_volume, sans copier le volume
+        ref = shift_volume(vol, off, vol.shape, 0.0)
+        from viewer import _slice
+        assert np.array_equal(_slice_off(vol, view, i, off), _slice(ref, view, i)), view
+    off_mip = (2, 0, 4)  # le MIP se projette selon y : le décalage en y ne change que les bords, il est ignoré
+    assert np.array_equal(_slice_off(vol, "mip", 0, off_mip), np.max(shift_volume(vol, off_mip, vol.shape, 0.0), axis=1)[::-1])
+    assert (_slice_off(vol, "axial", 11, (5, 0, 0)) == 0).all()  # coupe décalée hors du volume : remplie
+    # lésions : le point de B correspondant au pic de A est p + rel
+    b = np.zeros((30, 30, 30), np.float32)
+    b[20, 15, 15] = 8
+    les = [{"peak": [10, 15, 15], "suv_max": 4.0}]
+    assert _add_b([dict(l) for l in les], b, (2, 2, 2), radius_mm=2)[0]["suv_b"] == 0          # sans décalage : rien en B
+    assert _add_b([dict(l) for l in les], b, (2, 2, 2), radius_mm=2, rel=(10, 0, 0))[0]["suv_b"] == 8
+    assert _add_b([dict(l) for l in les], b, (2, 2, 2), radius_mm=2, rel=(-40, 0, 0))[0]["suv_b"] == 0  # fenêtre hors volume
+    suv, spacing, ctv = demo()
+    state = State()
+    state.set(suv, spacing, ctv)
+    srv = _server(state)
+    try:
+        a = _get(srv, "/img?view=axial&i=30&vmax=10&mode=pet")[1]
+        assert _get(srv, "/img?view=axial&i=30&vmax=10&mode=pet&oa=0,5,0")[1] != a          # A décalée : image différente
+        assert _get(srv, "/img?view=axial&i=30&vmax=10&mode=pet&ob=0,5,0")[1] == a          # B seule ne change pas A
+        assert _get(srv, "/img?view=axial&i=30&vmax=10&oa=1,2")[0] == 400                    # décalage mal formé
+        assert _get(srv, "/img?view=axial&i=30&vmax=10&oa=999,0,0")[0] == 400                # hors bornes
+        r = json.loads(_get(srv, "/measure?view=axial&i=30&fx=0.5&fy=0.5&pct=50&oa=0,0,0")[1])
+        assert "error" not in r
+    finally:
+        srv.shutdown()

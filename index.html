@@ -90,6 +90,7 @@
   th { color: var(--label-2); }
   td:first-child, th:first-child { text-align: left; }
   #cmpseg span { min-width: 58px; padding: 0 6px; }
+  details.subsec { margin-top: 8px; } details.subsec > summary { cursor: pointer; min-height: 28px; display: flex; align-items: center; color: var(--label-2); }
   td.up { color: #ff6961; } td.down { color: #64b5ff; }   /* évolution d'une lésion : hausse / baisse */
   tr.les { cursor: pointer; }
   tr.les:hover td, tr.les:focus-visible td { background: var(--surface-2); }
@@ -167,6 +168,12 @@
         <label class="row" id="splitbox" hidden><span>Position du curseur <span><b id="splitv">50</b> %</span></span>
           <input id="split" type="range" min="0" max="100" step="1" value="50"></label>
         <div id="cinfo" class="hint"></div>
+        <details id="offsec" class="subsec">
+          <summary>Alignement fin : décaler chaque séance</summary>
+          <div id="offs"></div>
+          <p class="hint">Chaque séance se décale séparément, en voxels (1 voxel ≈ 1,6 mm en x et y, 2,1 mm en z). Le tableau des lésions,
+            les mesures et le PDF en tiennent compte. Les curseurs se règlent à la molette (Maj = ×10).</p>
+        </details>
       </div>
     </details>
 
@@ -219,6 +226,10 @@ const views = [["axial", 0], ["coronal", 1], ["sagittal", 2], ["mip", null]];
 const ROWCOL = { axial: [1, 2], coronal: [0, 2], sagittal: [0, 1], mip: [0, 2] };  // axes (ligne, colonne) de [z, y, x]
 const sliders = {}, zoom = {};
 let cmpMode = "a", mipsReady = false;  // séance affichée : a | b | swipe | diff
+// Décalage manuel de chaque séance (voxels, [z, y, x]) : valeur affichée = déplacement visuel de l'image vers les indices croissants
+// (+z vers la tête, +y vers l'arrière, +x vers la gauche du patient). Le serveur reçoit l'opposé : out[i] = vol[i + d].
+const off = { A: [0, 0, 0], B: [0, 0, 0] };
+const offParam = s => off[s].map(v => -v).join(",");
 let rev = 0;  // révision des données : change l'URL des images quand le CT change (même URL = le navigateur ne recharge pas)
 const ms = [];  // mesures : {v, i, kind: "ruler"|"auto", source, items, text, X, Y (auto : point cliqué, fractions de l'image entière)}
 let shape, spacing, pending = null;  // pending : 1er point de la règle {v, i, a, cur}
@@ -248,7 +259,7 @@ function pick(view, X, Y) {
 function imgUrl(v, i = cur(v)) {
   const z = zoom[v];
   return `/img?view=${v}&i=${i}&vmax=${$("vmax").value}&cmap=${$("cmap").value}` +
-    `&mode=${$("mode").value}&alpha=${$("alpha").value}&z=${z.z}&x0=${z.x0}&y0=${z.y0}&organs=${$("orgs").checked ? 1 : 0}&r=${rev}&cmp=${cmpMode}&split=${$("split").value / 100}`;
+    `&mode=${$("mode").value}&alpha=${$("alpha").value}&z=${z.z}&x0=${z.x0}&y0=${z.y0}&organs=${$("orgs").checked ? 1 : 0}&r=${rev}&cmp=${cmpMode}&split=${$("split").value / 100}&oa=${offParam("A")}&ob=${offParam("B")}`;
 }
 
 // Une seule requête d'image en vol par vue, la dernière demande gagne : en faisant glisser un curseur, le serveur
@@ -359,7 +370,7 @@ function updateLoupe() {
 // (Re)calcule une mesure auto avec les réglages courants : % de région (TEP) ou tolérance HU (CT).
 async function fetchAuto(m) {
   const ct = m.source === "ct", tag = `Auto ${ct ? "CT " : ""}${m.cmp === "b" ? "séance B " : ""}${m.v} ${m.i + 1}`;
-  const r = await (await fetch(`/measure?view=${m.v}&i=${m.i}&fx=${m.X}&fy=${m.Y}&source=${m.source}&pct=${$("pct").value}&tol=${$("tol").value}&cmp=${m.cmp || "a"}`)).json();
+  const r = await (await fetch(`/measure?view=${m.v}&i=${m.i}&fx=${m.X}&fy=${m.Y}&source=${m.source}&pct=${$("pct").value}&tol=${$("tol").value}&cmp=${m.cmp || "a"}&oa=${offParam("A")}&ob=${offParam("B")}`)).json();
   if (r.error) { m.items = []; m.text = `${tag} : ${r.error}`; return; }
   m.items = [
     { t: "dots", pts: r.boundary, color: "rgba(255,255,0,.8)" },
@@ -411,7 +422,7 @@ async function lesions() {
   if (!isFinite(parseFloat($("thr").value))) return;  // champ vide ou en cours de saisie
   const my = ++lesTok;  // une réponse plus ancienne ne doit pas écraser une plus récente
   $("tbl").style.opacity = .5;
-  const r = await (await fetch("/lesions?thr=" + $("thr").value)).json();
+  const r = await (await fetch(`/lesions?thr=${$("thr").value}&oa=${offParam("A")}&ob=${offParam("B")}`)).json();
   if (my !== lesTok) return;
   $("tbl").style.opacity = 1;
   lesionList = r;
@@ -431,8 +442,9 @@ async function lesions() {
 }
 
 function gotoLesion(l) {
-  const [z, y, x] = l.peak, [nz, ny, nx] = shape;
-  marker = { z, y, x };
+  const [nz, ny, nx] = shape;
+  marker = { z: l.peak[0], y: l.peak[1], x: l.peak[2] };  // indices de la séance A ; affichés décalés de off.A
+  const [z, y, x] = l.peak.map((p, k) => clamp(p + off.A[k], 0, shape[k] - 1));
   sliders.axial.value = z; sliders.coronal.value = y; sliders.sagittal.value = x;
   if (sliders.mip) sliders.mip.value = 0;  // le repère n'a de sens que sur le MIP de face
   // vues zoomées : on recentre sur la lésion pour qu'elle reste visible
@@ -448,7 +460,7 @@ function gotoLesion(l) {
 // Position du repère (fractions de l'image entière) sur une vue, ou null s'il est hors de la coupe affichée.
 function markerPos(v) {
   if (!marker) return null;
-  const [nz, ny, nx] = shape, { z, y, x } = marker;
+  const [nz, ny, nx] = shape, z = marker.z + off.A[0], y = marker.y + off.A[1], x = marker.x + off.A[2];
   if (v === "axial") return Math.abs(cur(v) - z) <= 1 ? [(x + .5) / nx, (y + .5) / ny] : null;
   if (v === "coronal") return Math.abs(cur(v) - y) <= 1 ? [(x + .5) / nx, 1 - (z + .5) / nz] : null;
   if (v === "sagittal") return Math.abs(cur(v) - x) <= 1 ? [(y + .5) / ny, 1 - (z + .5) / nz] : null;
@@ -513,7 +525,7 @@ async function loadPatient() {
 async function build(info) {
   $("glob").textContent = "SUVmax global : " + info.suv_max.toFixed(2);
   shape = info.shape; spacing = info.spacing;
-  ms.length = 0; pending = null; lastMove = null; marker = null; showRes();
+  ms.length = 0; pending = null; lastMove = null; marker = null; showRes(); zeroOffsets();
   if (playTimer) { clearInterval(playTimer); playTimer = 0; }
   const fig = v => `<figure><figcaption>${v} <b id="n-${v}"></b></figcaption>` +
     `<div class="wrap"><img id="img-${v}"><canvas id="cv-${v}"></canvas></div><input type="range" id="s-${v}"></figure>`;
@@ -606,6 +618,31 @@ async function watchMips() {
     await new Promise(r => setTimeout(r, 1000));
   }
 }
+// Alignement fin : trois curseurs (z, y, x) par séance. Chaque séance se décale indépendamment ; tableau des lésions et mesures suivent.
+const AXES = [["z", "tête (+) / pieds (−)"], ["y", "arrière (+) / avant (−)"], ["x", "gauche du patient (+) / droite (−)"]];
+function buildOffsets() {
+  $("offs").innerHTML = ["A", "B"].map(s => `<fieldset class="layers"><legend>Séance ${s}</legend>` +
+    AXES.map(([a, hint], k) => `<label class="row"><span>${a} · ${hint} <b id="o${s}${k}v">0</b></span>` +
+      `<input id="o${s}${k}" type="range" min="-40" max="40" step="1" value="0"></label>`).join("") +
+    `<button id="o${s}r">Remettre à zéro</button></fieldset>`).join("");
+  for (const s of ["A", "B"]) {
+    for (let k = 0; k < 3; k++) $(`o${s}${k}`).oninput = () => { off[s][k] = +$(`o${s}${k}`).value; offLabel(s, k); offChanged(); };
+    $(`o${s}r`).onclick = () => { zeroOffsets(s); offChanged(); };
+  }
+}
+function offLabel(s, k) {
+  const v = off[s][k];
+  $(`o${s}${k}v`).textContent = `${v > 0 ? "+" : ""}${v} vox ≈ ${(v * (spacing ? spacing[k] : 1.6)).toFixed(1)} mm`;
+}
+function zeroOffsets(s = null) {
+  for (const t of s ? [s] : ["A", "B"]) for (let k = 0; k < 3; k++) { off[t][k] = 0; $(`o${t}${k}`).value = 0; offLabel(t, k); }
+}
+let offT = 0;
+function offChanged() {
+  refresh(); drawAll();
+  clearTimeout(offT); offT = setTimeout(() => { lesions(); remeasure(); }, 350);  // tableau et mesures suivent, après une courte pause
+}
+
 // Le MIP tourné n'existe que pour la séance A : en comparaison, MIP de face seulement (curseur et lecture désactivés).
 function syncMip() {
   const s = sliders.mip, off = cmpMode !== "a" || !mipsReady;
@@ -623,6 +660,7 @@ async function openCompare() {
   if (!f) return;
   const r = await (await fetch("/compare?folder=" + encodeURIComponent(f))).json();
   if (r.error) { $("cmsg").textContent = r.error; return; }
+  zeroOffsets("B");  // nouvelle séance B : son décalage manuel repart de zéro
   watchCompare();
 }
 async function watchCompare() {
@@ -683,7 +721,7 @@ async function organTip(v, x, y) {
   tipBusy = true;
   const r = $("img-" + v).getBoundingClientRect(), [X, Y] = toFull(v, (x - r.left) / r.width, (y - r.top) / r.height);
   try {
-    const o = await (await fetch(`/organ_at?view=${v}&i=${cur(v)}&fx=${X}&fy=${Y}`)).json();
+    const o = await (await fetch(`/organ_at?view=${v}&i=${cur(v)}&fx=${X}&fy=${Y}&oa=${offParam("A")}`)).json();
     tip.hidden = !o.nom || v === "mip"; tip.textContent = o.nom || "";
     tip.style.left = (x + 14) + "px"; tip.style.top = (y + 14) + "px";
   } finally { tipBusy = false; }
@@ -766,7 +804,7 @@ $("browse").onclick = async () => {
 $("pdf").onclick = async () => {
   const state = {
     views: ["axial", "coronal", "sagittal"].map(v => ({ view: v, i: cur(v), z: zoom[v].z, x0: zoom[v].x0, y0: zoom[v].y0 })),
-    vmax: +$("vmax").value, cmap: $("cmap").value, mode: $("mode").value, alpha: +$("alpha").value, organs: $("orgs").checked, cmp: cmpMode, split: $("split").value / 100,
+    vmax: +$("vmax").value, cmap: $("cmap").value, mode: $("mode").value, alpha: +$("alpha").value, organs: $("orgs").checked, cmp: cmpMode, split: $("split").value / 100, oa: off.A.map(v => -v), ob: off.B.map(v => -v),
     measures: ms.map(m => ({ v: m.v, i: m.i, text: m.text, items: m.items })),
   };
   $("pdf").disabled = true;
@@ -785,5 +823,6 @@ $("reset").onclick = () => { for (const [v] of views) zoom[v] = { z: 1, x0: 0, y
 $("clear").onclick = () => { ms.length = 0; pending = null; marker = null; showRes(); drawAll(); };
 document.querySelectorAll("input[name=tool]").forEach(r => r.onchange = () => { pending = null; showRes(); drawAll(); updateLoupe(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") { pending = null; showRes(); drawAll(); } });
+buildOffsets();
 start();
 </script>

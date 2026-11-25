@@ -481,6 +481,14 @@ def make_handler(state):
                 return frame, (spacing[0], spacing[1] * 2, spacing[2] * 2)  # calculé sur une grille xy réduite ×2
             return (None if _angle(int(q["i"])) == 0 else False), spacing
 
+        @staticmethod
+        def _off(q, key):
+            """Décalage manuel (dz, dy, dx) en voxels, passé sous la forme « z,y,x » ; ValueError si invalide (réponse 400)."""
+            v = tuple(int(c) for c in q.get(key, "0,0,0").split(","))
+            if len(v) != 3 or any(abs(c) > 400 for c in v):
+                raise ValueError("décalage invalide")
+            return v
+
         def _json(self, obj, code=200):
             self._send(json.dumps(obj).encode(), "application/json", code)
 
@@ -541,7 +549,8 @@ def make_handler(state):
                     return self._json(patient)
                 if u.path == "/lesions":
                     les = analyze(suv, float(np.prod(spacing)) / 1000, float(q["thr"]))
-                    return self._json(_add_b(les, state.cmp["suv"], spacing) if state.cmp else les)
+                    rel = tuple(b - a for a, b in zip(self._off(q, "oa"), self._off(q, "ob")))  # B relativement à A
+                    return self._json(_add_b(les, state.cmp["suv"], spacing, rel=rel) if state.cmp else les)
                 if u.path == "/img":
                     cmap, mode = q.get("cmap", "jet"), q.get("mode", "pet")
                     z = float(q.get("z", 1))
@@ -564,11 +573,12 @@ def make_handler(state):
                     b = (cmpd["suv"], cmpd["ctv"]) if cmpd else None
                     labels = org[0] if q.get("organs") == "1" and org else None
                     i = (_angle(int(q["i"])) if cmpmode == "a" else 0) if q["view"] == "mip" else int(q["i"])
+                    oa, ob = self._off(q, "oa"), self._off(q, "ob")  # décalages manuels de A et de B
                     key = (q["view"], i, float(q["vmax"]), cmap, mode, float(q.get("alpha", 0.6)), box, id(suv), id(ctv),
-                           id(labels), cmpmode, split if cmpmode == "swipe" else 0, id(b[0]) if b else 0)
+                           id(labels), cmpmode, split if cmpmode == "swipe" else 0, id(b[0]) if b else 0, oa, ob)
                     return self._send(cached(key, lambda: render_study(
                         (suv, ctv), b, cmpmode, split, q["view"], int(q["i"]), float(q["vmax"]), cmap, sp, mode,
-                        float(q.get("alpha", 0.6)), box, labels, frame)), "image/png")
+                        float(q.get("alpha", 0.6)), box, labels, frame, oa, ob)), "image/png")
                 if u.path == "/organs":
                     org = state.organs
                     return self._json({"status": "unavailable" if ctv is None else "ready" if org else "computing",
@@ -577,7 +587,7 @@ def make_handler(state):
                     org = state.organs
                     if not org:
                         return self._json({})
-                    lab = _slice(org[0], q["view"], int(q["i"]))
+                    lab = _slice_off(org[0], q["view"], int(q["i"]), self._off(q, "oa"))  # les organes suivent la séance A
                     oid = int(lab[min(lab.shape[0] - 1, max(0, int(float(q["fy"]) * lab.shape[0]))),
                                   min(lab.shape[1] - 1, max(0, int(float(q["fx"]) * lab.shape[1])))])
                     return self._json({"nom": ORGANS[oid][0]} if oid in ORGANS else {})
@@ -588,7 +598,8 @@ def make_handler(state):
                     if frame is False:
                         return self._json({"error": "MIP en cours de calcul"})
                     return self._json(measure(suv_m, sp, q["view"], int(q["i"]), float(q["fx"]), float(q["fy"]),
-                                              float(q.get("pct", 50)), ctv_m, q.get("source", "pet"), float(q.get("tol", 50)), frame))
+                                              float(q.get("pct", 50)), ctv_m, q.get("source", "pet"), float(q.get("tol", 50)), frame,
+                                              self._off(q, "ob" if cmpd else "oa")))
                 return self.send_error(404)
             except (KeyError, ValueError):
                 return self.send_error(400)
@@ -615,8 +626,10 @@ def make_handler(state):
                 cmpd = state.cmp  # comparaison de séances : le PDF reproduit l'affichage (A, B, curseur ou différence)
                 cm = st.get("cmp") if cmpd and st.get("cmp") in ("a", "b", "swipe", "diff") else "a"
                 split, b = float(st.get("split", 0.5)), ((cmpd["suv"], cmpd["ctv"]) if cmpd else None)
+                oa, ob = (tuple(int(c) for c in st.get(k, (0, 0, 0))) for k in ("oa", "ob"))  # décalages manuels affichés
                 pdf = build_pdf(lambda view, i, vmax, cmap, mode, alpha, box:
-                                render_study((suv, ctv), b, cm, split, view, i, vmax, cmap, spacing, mode, alpha, box, labels),
+                                render_study((suv, ctv), b, cm, split, view, i, vmax, cmap, spacing, mode, alpha, box, labels,
+                                             None, oa, ob),
                                 suv.shape, st, req.get("patient") or {})
             except (KeyError, ValueError, TypeError, AttributeError):
                 return self.send_error(400)
