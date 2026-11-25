@@ -92,10 +92,12 @@ function draw(v) {
   c.width = img.clientWidth; c.height = img.clientHeight;
   const g = c.getContext("2d"), P = ([X, Y]) => { const [a, b] = toView(v, X, Y); return [a * c.width, b * c.height]; };
   g.font = "bold 13px system-ui"; g.lineWidth = 2;
-  const label = (pt, text, color) => {
-    const [x, y] = P(pt), w = g.measureText(text).width;
-    g.fillStyle = "rgba(0,0,0,.75)"; g.fillRect(x + 6, y - 18, w + 8, 18);
-    g.fillStyle = color; g.fillText(text, x + 10, y - 5);
+  // étiquette au-delà du bout du segment (côté opposé à l'autre bout) pour ne pas masquer la lésion
+  const label = (pt, from, text, color) => {
+    const [x, y] = P(pt), [fx, fy] = P(from), w = g.measureText(text).width + 8, dx = x - fx, dy = y - fy;
+    const [lx, ly] = Math.abs(dx) > Math.abs(dy) ? [dx > 0 ? x + 8 : x - 8 - w, y - 9] : [x - w / 2, dy > 0 ? y + 8 : y - 26];
+    g.fillStyle = "rgba(0,0,0,.75)"; g.fillRect(lx, ly, w, 18);
+    g.fillStyle = color; g.fillText(text, lx + 4, ly + 13);
   };
   const dot = (pt, color) => { const [x, y] = P(pt); g.fillStyle = color; g.beginPath(); g.arc(x, y, 3, 0, 7); g.fill(); };
   const items = [];
@@ -107,7 +109,7 @@ function draw(v) {
     else {
       g.strokeStyle = it.color; g.beginPath(); g.moveTo(...P(it.a)); g.lineTo(...P(it.b)); g.stroke();
       dot(it.a, it.color); dot(it.b, it.color);
-      label(it.b, it.text, it.color);  // au bout du segment : longueur et largeur se croisent au centre
+      label(it.b, it.a, it.text, it.color);
     }
   }
 }
