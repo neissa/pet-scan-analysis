@@ -6,6 +6,8 @@ import json
 import subprocess
 import sys
 import threading
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -14,6 +16,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from PIL import Image
 from scipy import ndimage
 
 from export_pdf import build_pdf
@@ -93,11 +96,29 @@ def measure(suv, spacing, view, i, fx, fy, pct, ctv=None, source="pet", tol=50, 
     return res
 
 
+_POOL = ThreadPoolExecutor(max_workers=8)
+_LUTS = {}
+
+
+def _lut(cmap):
+    """Table de 256 couleurs (uint8) d'une palette, calculée une seule fois."""
+    if cmap not in _LUTS:
+        _LUTS[cmap] = (plt.get_cmap(cmap)(np.linspace(0, 1, 256))[:, :3] * 255).round().astype(np.uint8)
+    return _LUTS[cmap]
+
+
+def _png(rgb):
+    """PNG d'une image uint8 (h, w, 3). Compression niveau 1 : 3 à 4 fois plus rapide, fichier ~2 fois plus gros (échange local)."""
+    buf = io.BytesIO()
+    Image.fromarray(rgb).save(buf, "PNG", compress_level=1)
+    return buf.getvalue()
+
+
 def _organs_overlay(rgb, lab):
-    """Teinte translucide + contour de chaque organe (lab : étiquettes entières de la même taille que rgb)."""
+    """Teinte translucide + contour de chaque organe (rgb : float32 en 0..255 ; lab : étiquettes de la même taille)."""
     for oid in np.unique(lab):
         if oid in ORGANS:
-            col = np.array(matplotlib.colors.to_rgb(ORGANS[oid][1]))
+            col = np.array(matplotlib.colors.to_rgb(ORGANS[oid][1]), np.float32) * 255
             m = lab == oid
             rgb[m] = 0.72 * rgb[m] + 0.28 * col
             rgb[m & ~ndimage.binary_erosion(m, iterations=2)] = col
@@ -117,25 +138,25 @@ def render(suv, view, i, vmax, cmap="jet", spacing=(1, 1, 1), ctv=None, mode="pe
     mode : "pet", "ct" ou "fusion" (TEP en couleur sur CT ; opacité nulle à SUV 0, pleine dès 25 % de vmax).
     Fenêtre CT fixe -160..240 HU (tissus mous). labels : volume d'organes à superposer (sauf sur la MIP)."""
     # mip : image d'un MIP tourné déjà calculée (spacing = celui de cette image) ; sinon MIP de face au pleine résolution
-    pet = _up(mip if (view == "mip" and mip is not None) else _slice(suv, view, i), view, spacing, box)
-    buf = io.BytesIO()
     show_ct = ctv is not None and mode in ("fusion", "ct") and view != "mip"
     show_organs = labels is not None and view != "mip"
-    if show_ct or show_organs:
-        if show_ct:
-            img = np.clip((_up(_slice(ctv, view, i), view, spacing, box) + 160) / 400, 0, 1)[..., None] * np.ones(3)
-            if mode == "fusion":
-                col = plt.get_cmap(cmap)(np.clip(pet / vmax, 0, 1))[..., :3]
-                a = (alpha * np.clip(pet / (0.25 * vmax), 0, 1))[..., None]
-                img = img * (1 - a) + col * a
-        else:
-            img = plt.get_cmap(cmap)(np.clip(pet / vmax, 0, 1))[..., :3]
-        if show_organs:
-            img = _organs_overlay(img, np.rint(_up(_slice(labels, view, i), view, spacing, box, order=0)).astype(np.uint8))
-        plt.imsave(buf, np.clip(img, 0, 1), format="png")
+    # les interpolations TEP et CT sont indépendantes : en parallèle (scipy libère le verrou Python)
+    pet_f = _POOL.submit(_up, mip if (view == "mip" and mip is not None) else _slice(suv, view, i), view, spacing, box)
+    ct_f = _POOL.submit(_up, _slice(ctv, view, i), view, spacing, box) if show_ct else None
+    pet = pet_f.result()
+    idx = (np.clip(pet / vmax, 0, 1) * 255).astype(np.uint8)  # indice dans la palette
+    if not (show_ct or show_organs):
+        return _png(_lut(cmap)[idx])
+    if show_ct:
+        img = np.clip((ct_f.result() + 160) * (255 / 400), 0, 255)[..., None] * np.ones(3, np.float32)
+        if mode == "fusion":
+            a = (alpha * np.clip(pet / (0.25 * vmax), 0, 1))[..., None]
+            img = img * (1 - a) + _lut(cmap)[idx] * a
     else:
-        plt.imsave(buf, pet, cmap=cmap, vmin=0, vmax=vmax, format="png")
-    return buf.getvalue()
+        img = _lut(cmap)[idx].astype(np.float32)
+    if show_organs:
+        img = _organs_overlay(img, np.rint(_up(_slice(labels, view, i), view, spacing, box, order=0)).astype(np.uint8))
+    return _png(np.clip(img, 0, 255).astype(np.uint8))
 
 
 # --- dossiers récents et sélecteur natif ---
@@ -174,20 +195,25 @@ class State:
         self.organs = None  # (labels, infos) des organes du volume courant, calculés en arrière-plan
         self.mips = None    # {angle: image} du MIP tourné, remplie en arrière-plan
         self.cts = None     # séries CT du dossier : {series, origin, choices, uid}
+        self._ctcache = {}  # {uid: CT rééchantillonné} : un changement de série déjà chargée est instantané
+        self._orgcache = {} # {uid: (labels, infos)} : idem pour les organes
         self.status, self.message = "idle", ""
         self._lock = threading.Lock()
 
     def set(self, suv, spacing, ctv, patient=None, folder=""):
         self.organs = self.mips = self.cts = None
+        self._ctcache, self._orgcache = {}, {}
         self.vol = (suv, spacing, ctv, patient or {}, folder)
         self.status, self.message = "ready", ""
         threading.Thread(target=self._mips, args=(self.vol,), daemon=True).start()
 
-    def _organs(self, vol):
+    def _organs(self, vol, uid):
+        cache = self._orgcache  # celui de ce dossier : si on change de dossier pendant le calcul, on n'y touche plus
         try:
             res = segment_organs(vol[0], vol[2], vol[1])
         except Exception:  # une segmentation ratée ne doit pas gêner la visionneuse
             return
+        cache[uid] = res
         if self.vol is vol:  # le volume n'a pas changé pendant le calcul
             self.organs = res
 
@@ -217,6 +243,10 @@ class State:
         cts = self.cts
         if not cts or uid not in cts["series"]:
             return None
+        ctv = self._ctcache.get(uid)
+        if ctv is not None:  # série déjà en mémoire : bascule instantanée
+            self._swap_ct(uid, ctv)
+            return True
         with self._lock:
             if self.status == "loading":
                 return False
@@ -224,8 +254,17 @@ class State:
         threading.Thread(target=self._reload_ct, args=(uid,), daemon=True).start()
         return True
 
+    def _swap_ct(self, uid, ctv):
+        """Remplace le CT affiché ; les organes viennent du cache s'ils ont déjà été calculés pour cette série."""
+        vol = self.vol
+        self.vol = (vol[0], vol[1], ctv, vol[3], vol[4])
+        self.cts = {**self.cts, "uid": uid}
+        self.organs = self._orgcache.get(uid)
+        if self.organs is None:
+            threading.Thread(target=self._organs, args=(self.vol, uid), daemon=True).start()
+
     def _reload_ct(self, uid):
-        vol, cts = self.vol, self.cts
+        vol, cts, cache = self.vol, self.cts, self._ctcache
         try:
             ctv = load_ct(vol[4], vol[0].shape, vol[1], cts["origin"], uid, cts["series"])
         except SystemExit as e:
@@ -233,11 +272,22 @@ class State:
         except Exception as e:
             self.status, self.message = "error", f"{type(e).__name__} : {e}"
         else:
-            self.organs = None
-            self.vol = (vol[0], vol[1], ctv, vol[3], vol[4])
-            self.cts = {**cts, "uid": uid}
+            cache[uid] = ctv
+            self._swap_ct(uid, ctv)
             self.status, self.message = "ready", ""
-            threading.Thread(target=self._organs, args=(self.vol,), daemon=True).start()
+
+    def _preload_cts(self, vol):
+        """Charge en arrière-plan les autres séries CT du dossier : les changements de couche sont ensuite instantanés."""
+        cache = self._ctcache
+        for c in (self.cts or {}).get("choices", []):
+            cts = self.cts
+            if self.vol is None or self.vol[0] is not vol[0] or not cts:
+                return  # autre dossier entre-temps
+            if c["uid"] not in cache:
+                try:
+                    cache[c["uid"]] = load_ct(vol[4], vol[0].shape, vol[1], cts["origin"], c["uid"], cts["series"])
+                except Exception:
+                    pass
 
     def open(self, folder):
         """Lance le chargement ; False si un chargement est déjà en cours."""
@@ -263,12 +313,28 @@ class State:
             self.set(suv, spacing, ctv, patient, folder)
             if series:
                 self.cts = {"series": series, "origin": origin, "choices": ct_choices(series, origin), "uid": uid}
+                self._ctcache[uid] = ctv
+                threading.Thread(target=self._preload_cts, args=(self.vol,), daemon=True).start()
             remember(folder)
             if ctv is not None:
-                threading.Thread(target=self._organs, args=(self.vol,), daemon=True).start()
+                threading.Thread(target=self._organs, args=(self.vol, uid), daemon=True).start()
 
 
 def make_handler(state):
+    cache, cache_lock = OrderedDict(), threading.Lock()  # images déjà rendues (coupes revues, coupes voisines préchargées)
+
+    def cached(key, make):
+        with cache_lock:
+            if key in cache:
+                cache.move_to_end(key)
+                return cache[key]
+        png = make()
+        with cache_lock:
+            cache[key] = png
+            while len(cache) > 300:
+                cache.popitem(last=False)
+        return png
+
     class H(BaseHTTPRequestHandler):
         def _send(self, body, ct, code=200, extra=None):
             self.send_response(code)
@@ -347,9 +413,13 @@ def make_handler(state):
                     frame, sp = self._mip_source(q, spacing)
                     if frame is False:
                         return self._json({"error": "MIP en cours de calcul"}, 503)
-                    return self._send(render(suv, q["view"], int(q["i"]), float(q["vmax"]), cmap, sp,
-                                             ctv, mode, float(q.get("alpha", 0.6)), box,
-                                             org[0] if q.get("organs") == "1" and org else None, frame), "image/png")
+                    labels = org[0] if q.get("organs") == "1" and org else None
+                    i = _angle(int(q["i"])) if q["view"] == "mip" else int(q["i"])
+                    key = (q["view"], i, float(q["vmax"]), cmap, mode, float(q.get("alpha", 0.6)), box,
+                           id(suv), id(ctv), id(labels))  # un autre volume, CT ou jeu d'organes = une autre clé
+                    return self._send(cached(key, lambda: render(suv, q["view"], int(q["i"]), float(q["vmax"]), cmap, sp,
+                                                                 ctv, mode, float(q.get("alpha", 0.6)), box, labels, frame)),
+                                      "image/png")
                 if u.path == "/organs":
                     org = state.organs
                     return self._json({"status": "unavailable" if ctv is None else "ready" if org else "computing",

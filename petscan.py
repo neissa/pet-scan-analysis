@@ -52,7 +52,8 @@ def load_suv(folder):
         delay += 86400
     f = suv_factor(float(s0.PatientWeight), float(rp.RadionuclideTotalDose),
                    float(rp.RadionuclideHalfLife), delay)
-    vol = np.stack([s.pixel_array * float(s.RescaleSlope) + float(s.RescaleIntercept)
+    # float32 : moitié moins de mémoire et de temps de calcul que float64 (500 Mo -> 250 Mo), précision largement suffisante
+    vol = np.stack([(s.pixel_array * float(s.RescaleSlope) + float(s.RescaleIntercept)).astype(np.float32)
                     for s in slices])
     z = np.median(np.diff([float(s.ImagePositionPatient[2]) for s in slices]))
     if [round(v) for v in s0.ImageOrientationPatient] != [1, 0, 0, 0, 1, 0]:
@@ -122,13 +123,19 @@ def load_ct(folder, shape, spacing, origin, uid=None, series=None):
 def analyze(suv, voxel_ml, thr=2.5):
     """Lésions = composantes connexes de SUV >= thr. Triées par SUVmax décroissant."""
     labels, n = ndimage.label(suv >= thr)
-    out = []
-    peaks = ndimage.maximum_position(suv, labels, range(1, n + 1)) if n else []  # position (z,y,x) du pic de chaque lésion
-    for i in range(1, n + 1):
-        v = suv[labels == i]
-        mtv = v.size * voxel_ml
-        out.append({"suv_max": float(v.max()), "suv_mean": float(v.mean()),
-                    "mtv_ml": mtv, "tlg": float(v.mean() * mtv), "peak": [int(c) for c in peaks[i - 1]]})
+    if not n:
+        return []
+    # Seuls les voxels des lésions sont triés (quelques millions, pas tout le volume) : ndimage.maximum/maximum_position
+    # trient les 60 millions de voxels et prennent ~18 s.
+    flat = np.flatnonzero(labels)
+    lab, val = labels.ravel()[flat], suv.ravel()[flat]
+    counts = np.bincount(lab, minlength=n + 1)[1:]
+    sums = np.bincount(lab, weights=val, minlength=n + 1)[1:]
+    order = np.lexsort((val, lab))                    # par lésion puis par valeur croissante : le dernier de chaque groupe est le pic
+    last = order[np.cumsum(counts) - 1]
+    peaks = np.unravel_index(flat[last], suv.shape)   # position (z,y,x) du pic de chaque lésion
+    out = [{"suv_max": float(val[last[i]]), "suv_mean": float(sums[i] / counts[i]), "mtv_ml": float(counts[i] * voxel_ml),
+            "tlg": float(sums[i] * voxel_ml), "peak": [int(p[i]) for p in peaks]} for i in range(n)]
     return sorted(out, key=lambda r: -r["suv_max"])
 
 

@@ -2,7 +2,7 @@
 name = "pet-scan-analysis"
 version = "0.1.0"
 requires-python = ">=3.9"
-dependencies = ["numpy", "scipy", "pydicom", "matplotlib"]
+dependencies = ["numpy", "scipy", "pydicom", "matplotlib", "pillow"]
 
 [tool.setuptools]
 py-modules = ["petscan"]
