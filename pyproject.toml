@@ -1,0 +1,8 @@
+[project]
+name = "pet-scan-analysis"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["numpy", "scipy", "pydicom", "matplotlib"]
+
+[tool.setuptools]
+py-modules = ["petscan"]

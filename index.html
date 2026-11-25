@@ -1,0 +1,214 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Visionneuse TEP</title>
+<style>
+  body { font: 14px system-ui, sans-serif; background: #161616; color: #ddd; margin: 1rem; }
+  .views { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  figure { margin: 0; }
+  figure:first-child { grid-column: span 2; } /* axial en grand */
+  .wrap { position: relative; line-height: 0; }
+  .wrap img { width: 100%; background: #fff; cursor: crosshair; }
+  .wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  input[type=range] { width: 100%; }
+  .bar { display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; margin: 0 0 1rem; }
+  #res { color: #fc6; min-height: 1.4em; margin: 0 0 .5rem; white-space: pre-line; }
+  table { border-collapse: collapse; margin-top: 1rem; }
+  td, th { border: 1px solid #444; padding: 4px 10px; text-align: right; }
+</style>
+
+<div class="bar">
+  <label>Fenêtre SUV max <input id="vmax" type="range" min="1" max="30" step="0.5" value="10"> <b id="vmaxv">10</b></label>
+  <label>Seuil lésion <input id="thr" type="number" value="2.5" step="0.1" min="0" style="width:5em"></label>
+  <label>Palette <select id="cmap"><option>jet</option><option>hot</option><option value="gray_r">gris</option></select></label>
+  <label id="fz">Affichage <select id="mode"><option value="fusion">Fusion TEP+CT</option><option value="pet">TEP</option><option value="ct">CT</option></select>
+    Opacité TEP <input id="alpha" type="range" min="0.1" max="1" step="0.05" value="0.6" style="width:100px"></label>
+  <span id="glob"></span>
+</div>
+<div class="bar">
+  <span>SUV 0</span><img id="bar" style="width:300px;height:14px"><span id="barmax">10</span>
+  <span>
+    Outil :
+    <label><input type="radio" name="tool" value="nav" checked> Naviguer</label>
+    <label><input type="radio" name="tool" value="ruler"> Règle (2 clics)</label>
+    <label><input type="radio" name="tool" value="auto"> Mesure auto</label>
+  </span>
+  <label id="pctbox" title="Molette pour ajuster">Région = <b id="pctv">50</b> % du max local
+    <input id="pct" type="range" min="1" max="100" step="1" value="50" style="width:160px"></label>
+  <button id="reset">Réinitialiser le zoom</button>
+  <button id="clear">Effacer les mesures</button>
+</div>
+<div id="res"></div>
+<div class="views" id="views"></div>
+<table id="tbl"></table>
+<p style="color:#888">Recherche uniquement, pas un dispositif médical. Molette sur une image = zoom centré sur la souris ;
+  molette sur le curseur « Région » = seuil de la mesure auto, recalculé en direct sur toutes les mesures auto.
+  Naviguer : un clic positionne les autres coupes. Mesure auto : sur le TEP, dans la coupe affichée.</p>
+
+<script>
+const $ = id => document.getElementById(id);
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const views = [["axial", 0], ["coronal", 1], ["sagittal", 2], ["mip", null]];
+const ROWCOL = { axial: [1, 2], coronal: [0, 2], sagittal: [0, 1], mip: [0, 2] };  // axes (ligne, colonne) de [z, y, x]
+const sliders = {}, zoom = {};
+const ms = [];  // mesures : {v, i, kind: "ruler"|"auto", items, text, X, Y (auto : point cliqué, fractions de l'image entière)}
+let shape, spacing, pending = null;  // pending : 1er point de la règle {v, i, a}
+
+const cur = v => sliders[v] ? +sliders[v].value : 0;
+const tool = () => document.querySelector("input[name=tool]:checked").value;
+const mmSize = v => { const [r, c] = ROWCOL[v]; return [shape[c] * spacing[c], shape[r] * spacing[r]]; };  // [largeur, hauteur] mm
+// fractions de l'image affichée (zoomée) <-> fractions de l'image entière
+const toFull = (v, fx, fy) => [zoom[v].x0 + fx / zoom[v].z, zoom[v].y0 + fy / zoom[v].z];
+const toView = (v, X, Y) => [(X - zoom[v].x0) * zoom[v].z, (Y - zoom[v].y0) * zoom[v].z];
+const showRes = extra => $("res").textContent = [...ms.map(m => m.text), extra].filter(Boolean).join("\n");
+const drawAll = () => views.forEach(([v]) => draw(v));
+
+// Clic (X, Y fractions de l'image entière) -> positionne les coupes des autres vues.
+// Coronal/sagittal/MIP ont la tête en haut : z = 1 - Y.
+function pick(view, X, Y) {
+  const [nz, ny, nx] = shape;
+  const set = (v, n, f) => sliders[v].value = Math.min(n - 1, Math.floor(f * n));
+  if (view === "axial") { set("sagittal", nx, X); set("coronal", ny, Y); }
+  else if (view === "sagittal") { set("coronal", ny, X); set("axial", nz, 1 - Y); }
+  else { set("sagittal", nx, X); set("axial", nz, 1 - Y); }  // coronal ou mip
+  refresh();
+}
+
+function refreshView(v) {
+  if (sliders[v]) $("n-" + v).textContent = `${cur(v) + 1} / ${+sliders[v].max + 1}`;
+  const z = zoom[v];
+  $("img-" + v).src = `/img?view=${v}&i=${cur(v)}&vmax=${$("vmax").value}&cmap=${$("cmap").value}` +
+    `&mode=${$("mode").value}&alpha=${$("alpha").value}&z=${z.z}&x0=${z.x0}&y0=${z.y0}`;
+}
+
+function refresh() {
+  $("vmaxv").textContent = $("barmax").textContent = $("vmax").value;
+  $("bar").src = "/bar?cmap=" + $("cmap").value;
+  for (const [v] of views) refreshView(v);
+}
+
+// --- surcouche de mesures (chacune n'est visible que sur la coupe où elle a été faite) ---
+function draw(v) {
+  const img = $("img-" + v), c = $("cv-" + v);
+  c.width = img.clientWidth; c.height = img.clientHeight;
+  const g = c.getContext("2d"), P = ([X, Y]) => { const [a, b] = toView(v, X, Y); return [a * c.width, b * c.height]; };
+  g.font = "bold 13px system-ui"; g.lineWidth = 2;
+  const label = (pt, text, color) => {
+    const [x, y] = P(pt), w = g.measureText(text).width;
+    g.fillStyle = "rgba(0,0,0,.75)"; g.fillRect(x + 6, y - 18, w + 8, 18);
+    g.fillStyle = color; g.fillText(text, x + 10, y - 5);
+  };
+  const dot = (pt, color) => { const [x, y] = P(pt); g.fillStyle = color; g.beginPath(); g.arc(x, y, 3, 0, 7); g.fill(); };
+  const items = [];
+  if (pending && pending.v === v && pending.i === cur(v)) items.push({ t: "dot", p: pending.a, color: "#0f0" });
+  for (const m of ms) if (m.v === v && (v === "mip" || m.i === cur(v))) items.push(...m.items);
+  for (const it of items) {
+    if (it.t === "dots") { g.fillStyle = it.color; for (const p of it.pts) { const [x, y] = P(p); g.fillRect(x - 1, y - 1, 2, 2); } }
+    else if (it.t === "dot") dot(it.p, it.color);
+    else {
+      g.strokeStyle = it.color; g.beginPath(); g.moveTo(...P(it.a)); g.lineTo(...P(it.b)); g.stroke();
+      dot(it.a, it.color); dot(it.b, it.color);
+      label(it.b, it.text, it.color);  // au bout du segment : longueur et largeur se croisent au centre
+    }
+  }
+}
+
+// (Re)calcule une mesure auto avec le % de région courant.
+async function fetchAuto(m) {
+  const tag = `Auto ${m.v} ${m.i + 1}`;
+  const r = await (await fetch(`/measure?view=${m.v}&i=${m.i}&fx=${m.X}&fy=${m.Y}&pct=${$("pct").value}`)).json();
+  if (r.error) { m.items = []; m.text = `${tag} : ${r.error}`; return; }
+  m.items = [
+    { t: "dots", pts: r.boundary, color: "rgba(255,255,0,.8)" },
+    { t: "line", a: r.axes[0], b: r.axes[1], color: "#0ff", text: "Longueur " + r.length_mm.toFixed(1) + " mm" },
+    { t: "line", a: r.perp[0], b: r.perp[1], color: "#f0f", text: "Largeur " + r.width_mm.toFixed(1) + " mm" }];
+  m.text = `${tag} : longueur ${r.length_mm.toFixed(1)} mm × largeur ${r.width_mm.toFixed(1)} mm — ` +
+    `SUVmax ${r.suv_max.toFixed(2)}, SUVmean ${r.suv_mean.toFixed(2)}, aire ${(r.area_mm2 / 100).toFixed(2)} cm²`;
+}
+
+// Temps réel : si le curseur bouge pendant un calcul, on en relance un seul après (pas de file d'attente).
+let busy = false, again = false;
+async function remeasure() {
+  if (busy) { again = true; return; }
+  busy = true;
+  do {
+    again = false;
+    await Promise.all(ms.filter(m => m.kind === "auto").map(fetchAuto));
+    showRes(); drawAll();
+  } while (again);
+  busy = false;
+}
+
+async function onClick(v, fx, fy) {
+  const [X, Y] = toFull(v, fx, fy), t = tool();
+  if (t === "nav") return pick(v, X, Y);
+  if (t === "ruler") {
+    if (!pending || pending.v !== v || pending.i !== cur(v)) { pending = { v, i: cur(v), a: [X, Y] }; showRes("Règle : cliquez le 2e point"); return draw(v); }
+    const [W, H] = mmSize(v), d = Math.hypot((X - pending.a[0]) * W, (Y - pending.a[1]) * H);
+    ms.push({ v, i: cur(v), kind: "ruler", text: `Règle ${v} ${cur(v) + 1} : ${d.toFixed(1)} mm`,
+              items: [{ t: "line", a: pending.a, b: [X, Y], color: "#0f0", text: d.toFixed(1) + " mm" }] });
+    pending = null;
+    showRes();
+    return draw(v);
+  }
+  const m = { v, i: cur(v), kind: "auto", X, Y, items: [], text: "" };
+  await fetchAuto(m);
+  ms.push(m);
+  showRes(); draw(v);
+}
+
+async function lesions() {
+  const r = await (await fetch("/lesions?thr=" + $("thr").value)).json();
+  $("tbl").innerHTML = "<tr><th>#</th><th>SUVmax</th><th>SUVmean</th><th>MTV ml</th><th>TLG</th></tr>" +
+    r.map((l, i) => `<tr><td>${i + 1}</td><td>${l.suv_max.toFixed(2)}</td><td>${l.suv_mean.toFixed(2)}</td><td>${l.mtv_ml.toFixed(1)}</td><td>${l.tlg.toFixed(1)}</td></tr>`).join("");
+}
+
+(async () => {
+  const info = await (await fetch("/info")).json();
+  $("glob").textContent = "SUVmax global : " + info.suv_max.toFixed(2);
+  shape = info.shape; spacing = info.spacing;
+  $("views").innerHTML = views.map(([v]) =>
+    `<figure><figcaption>${v} <b id="n-${v}"></b></figcaption>` +
+    `<div class="wrap"><img id="img-${v}"><canvas id="cv-${v}"></canvas></div>` +
+    (v === "mip" ? "" : `<input type="range" id="s-${v}">`) + "</figure>").join("");
+  if (!info.ct) { $("mode").value = "pet"; $("fz").hidden = true; }  // pas de CT dans le dossier
+  for (const [v, ax] of views) {
+    zoom[v] = { z: 1, x0: 0, y0: 0 };
+    const img = $("img-" + v);
+    img.onload = () => draw(v);
+    img.onclick = e => {
+      const r = img.getBoundingClientRect();
+      onClick(v, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+    };
+    // zoom centré sur la souris : le point sous le curseur reste fixe
+    img.addEventListener("wheel", e => {
+      e.preventDefault();
+      const r = img.getBoundingClientRect(), mx = (e.clientX - r.left) / r.width, my = (e.clientY - r.top) / r.height;
+      const s = zoom[v], [X, Y] = toFull(v, mx, my);
+      const z2 = clamp(s.z * (e.deltaY < 0 ? 1.25 : 0.8), 1, 16), w = 1 / z2;
+      zoom[v] = { z: z2, x0: clamp(X - mx * w, 0, 1 - w), y0: clamp(Y - my * w, 0, 1 - w) };
+      refreshView(v);
+    }, { passive: false });
+    if (ax !== null) {
+      const s = sliders[v] = $("s-" + v);
+      s.max = info.shape[ax] - 1;
+      s.value = Math.floor(info.shape[ax] / 2);
+      s.oninput = () => refreshView(v);
+    }
+  }
+  $("vmax").oninput = $("cmap").onchange = $("mode").onchange = $("alpha").oninput = refresh;
+  $("thr").onchange = lesions;
+  $("pct").oninput = () => { $("pctv").textContent = $("pct").value; remeasure(); };
+  // molette sur le curseur « Région » : ±1 %
+  $("pctbox").addEventListener("wheel", e => {
+    e.preventDefault();
+    $("pct").value = clamp(+$("pct").value + (e.deltaY < 0 ? 1 : -1), 1, 100);
+    $("pct").oninput();
+  }, { passive: false });
+  $("reset").onclick = () => { for (const [v] of views) zoom[v] = { z: 1, x0: 0, y0: 0 }; refresh(); };
+  $("clear").onclick = () => { ms.length = 0; pending = null; showRes(); drawAll(); };
+  document.querySelectorAll("input[name=tool]").forEach(r => r.onchange = () => { pending = null; showRes(); drawAll(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { pending = null; showRes(); drawAll(); } });
+  refresh();
+  lesions();
+})();
+</script>
