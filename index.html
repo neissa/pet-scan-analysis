@@ -89,6 +89,8 @@
   td, th { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); }
   th { color: var(--label-2); }
   td:first-child, th:first-child { text-align: left; }
+  #cmpseg span { min-width: 58px; padding: 0 6px; }
+  td.up { color: #ff6961; } td.down { color: #64b5ff; }   /* évolution d'une lésion : hausse / baisse */
   tr.les { cursor: pointer; }
   tr.les:hover td, tr.les:focus-visible td { background: var(--surface-2); }
   #patientgrid { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0 0; }
@@ -145,8 +147,27 @@
         <select id="cmap"><option>jet</option><option>hot</option><option value="gray_r">gris</option></select></label>
       <label class="row"><span>Fenêtre SUV max <b id="vmaxv">10</b></span>
         <input id="vmax" type="range" min="1" max="30" step="0.5" value="10"></label>
-      <div class="cbar"><img id="bar" alt="Échelle de couleur SUV"><div><span>SUV 0</span><span id="barmax">10</span></div></div>
+      <div class="cbar"><img id="bar" alt="Échelle de couleur SUV"><div><span id="barmin">SUV 0</span><span id="barmax">10</span></div></div>
       <span id="glob"></span>
+    </details>
+
+    <details class="sec" id="cmpsec" open>
+      <summary>Comparaison de séances</summary>
+      <label class="row"><span>Séance B (autre date, même patient)</span>
+        <input id="cfolder" type="text" list="recent" placeholder="Dossier DICOM de la séance B" aria-label="Dossier de la séance B"></label>
+      <div class="btns"><button id="cbrowse" hidden>Parcourir…</button><button id="cload">Comparer</button></div>
+      <div id="cmsg" class="hint" role="status"></div>
+      <div id="cmpui" hidden>
+        <div class="seg" id="cmpseg" role="radiogroup" aria-label="Séance affichée">
+          <label title="Séance actuelle"><input type="radio" name="cmp" value="a" checked><span>A</span></label>
+          <label title="Séance B, recalée sur A"><input type="radio" name="cmp" value="b"><span>B</span></label>
+          <label title="A à gauche du curseur, B à droite"><input type="radio" name="cmp" value="swipe"><span>A | B</span></label>
+          <label title="SUV de A moins SUV de B : rouge = hausse, bleu = baisse"><input type="radio" name="cmp" value="diff"><span>A − B</span></label>
+        </div>
+        <label class="row" id="splitbox" hidden><span>Position du curseur <span><b id="splitv">50</b> %</span></span>
+          <input id="split" type="range" min="0" max="100" step="1" value="50"></label>
+        <div id="cinfo" class="hint"></div>
+      </div>
     </details>
 
     <details class="sec" open>
@@ -197,6 +218,7 @@ const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const views = [["axial", 0], ["coronal", 1], ["sagittal", 2], ["mip", null]];
 const ROWCOL = { axial: [1, 2], coronal: [0, 2], sagittal: [0, 1], mip: [0, 2] };  // axes (ligne, colonne) de [z, y, x]
 const sliders = {}, zoom = {};
+let cmpMode = "a", mipsReady = false;  // séance affichée : a | b | swipe | diff
 let rev = 0;  // révision des données : change l'URL des images quand le CT change (même URL = le navigateur ne recharge pas)
 const ms = [];  // mesures : {v, i, kind: "ruler"|"auto", source, items, text, X, Y (auto : point cliqué, fractions de l'image entière)}
 let shape, spacing, pending = null;  // pending : 1er point de la règle {v, i, a, cur}
@@ -226,7 +248,7 @@ function pick(view, X, Y) {
 function imgUrl(v, i = cur(v)) {
   const z = zoom[v];
   return `/img?view=${v}&i=${i}&vmax=${$("vmax").value}&cmap=${$("cmap").value}` +
-    `&mode=${$("mode").value}&alpha=${$("alpha").value}&z=${z.z}&x0=${z.x0}&y0=${z.y0}&organs=${$("orgs").checked ? 1 : 0}&r=${rev}`;
+    `&mode=${$("mode").value}&alpha=${$("alpha").value}&z=${z.z}&x0=${z.x0}&y0=${z.y0}&organs=${$("orgs").checked ? 1 : 0}&r=${rev}&cmp=${cmpMode}&split=${$("split").value / 100}`;
 }
 
 // Une seule requête d'image en vol par vue, la dernière demande gagne : en faisant glisser un curseur, le serveur
@@ -257,8 +279,11 @@ function prefetch(v) {
 }
 
 function refresh() {
-  $("vmaxv").textContent = $("barmax").textContent = $("vmax").value;
-  $("bar").src = "/bar?cmap=" + $("cmap").value;
+  const diff = cmpMode === "diff" && !$("cmpui").hidden, v = +$("vmax").value;  // différence A − B : échelle divergente ±vmax/2
+  $("vmaxv").textContent = $("vmax").value;
+  $("barmax").textContent = diff ? "+" + v / 2 + " (hausse)" : v;
+  $("barmin").textContent = diff ? "−" + v / 2 + " (baisse)" : "SUV 0";
+  $("bar").src = "/bar?cmap=" + (diff ? "bwr" : $("cmap").value);
   for (const [v] of views) refreshView(v);
 }
 
@@ -301,6 +326,12 @@ function draw(v) {
     }
   }
   drawMarker(v, g, P);
+  if (cmpMode === "swipe") {  // trait de séparation A | B (il suit le curseur de position)
+    const x = $("split").value / 100 * c.width;
+    g.strokeStyle = "#fff"; g.lineWidth = 2; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, c.height); g.stroke();
+    g.font = "bold 12px system-ui"; g.fillStyle = "#fff";
+    g.fillText("A", Math.max(4, x - 16), c.height - 8); g.fillText("B", Math.min(c.width - 14, x + 8), c.height - 8);
+  }
 }
 
 // --- loupe ×4 : zone sous le curseur agrandie, viseur à centre vide ---
@@ -327,8 +358,8 @@ function updateLoupe() {
 
 // (Re)calcule une mesure auto avec les réglages courants : % de région (TEP) ou tolérance HU (CT).
 async function fetchAuto(m) {
-  const ct = m.source === "ct", tag = `Auto ${ct ? "CT " : ""}${m.v} ${m.i + 1}`;
-  const r = await (await fetch(`/measure?view=${m.v}&i=${m.i}&fx=${m.X}&fy=${m.Y}&source=${m.source}&pct=${$("pct").value}&tol=${$("tol").value}`)).json();
+  const ct = m.source === "ct", tag = `Auto ${ct ? "CT " : ""}${m.cmp === "b" ? "séance B " : ""}${m.v} ${m.i + 1}`;
+  const r = await (await fetch(`/measure?view=${m.v}&i=${m.i}&fx=${m.X}&fy=${m.Y}&source=${m.source}&pct=${$("pct").value}&tol=${$("tol").value}&cmp=${m.cmp || "a"}`)).json();
   if (r.error) { m.items = []; m.text = `${tag} : ${r.error}`; return; }
   m.items = [
     { t: "dots", pts: r.boundary, color: "rgba(255,255,0,.8)" },
@@ -364,7 +395,9 @@ async function onClick(v, fx, fy) {
     showRes();
     return draw(v);
   }
-  const m = { v, i: cur(v), kind: "auto", source: v === "mip" ? "pet" : $("src").value, X, Y, items: [], text: "" };
+  // en mode curseur A | B, on mesure la séance qui est sous le point cliqué ; en différence, la séance A
+  const cmp = cmpMode === "b" ? "b" : cmpMode === "swipe" ? (fx >= $("split").value / 100 ? "b" : "a") : "a";
+  const m = { v, i: cur(v), kind: "auto", source: v === "mip" ? "pet" : $("src").value, cmp, X, Y, items: [], text: "" };
   await fetchAuto(m);
   ms.push(m);
   showRes(); draw(v);
@@ -382,9 +415,15 @@ async function lesions() {
   if (my !== lesTok) return;
   $("tbl").style.opacity = 1;
   lesionList = r;
-  $("tbl").innerHTML = "<tr><th>#</th><th>SUVmax</th><th>SUVmean</th><th>MTV ml</th><th>TLG</th></tr>" +
+  const cc = lesionList.length && lesionList[0].suv_b !== undefined;  // séance B chargée : colonnes d'évolution
+  const evo = l => {  // variation de SUVmax de B vers A, en rouge si hausse > 25 %, en bleu si baisse > 25 %
+    if (l.delta_pct == null) return `<td>—</td>`;
+    return `<td class="${l.delta_pct > 25 ? "up" : l.delta_pct < -25 ? "down" : ""}">${l.delta_pct > 0 ? "+" : ""}${l.delta_pct.toFixed(0)}</td>`;
+  };
+  $("tbl").innerHTML = "<tr><th>#</th><th>SUVmax</th><th>SUVmean</th><th>MTV ml</th><th>TLG</th>" + (cc ? "<th>SUVmax B</th><th>Δ %</th>" : "") + "</tr>" +
     lesionList.map((l, i) => `<tr class="les" data-i="${i}" tabindex="0" title="Aller à cette lésion"><td>${i + 1}</td><td>${l.suv_max.toFixed(2)}</td>` +
-      `<td>${l.suv_mean.toFixed(2)}</td><td>${l.mtv_ml.toFixed(1)}</td><td>${l.tlg.toFixed(1)}</td></tr>`).join("");
+      `<td>${l.suv_mean.toFixed(2)}</td><td>${l.mtv_ml.toFixed(1)}</td><td>${l.tlg.toFixed(1)}</td>` +
+      (cc ? `<td>${l.suv_b.toFixed(2)}</td>${evo(l)}` : "") + `</tr>`).join("");
   for (const tr of $("tbl").querySelectorAll("tr.les")) {
     tr.onclick = () => gotoLesion(lesionList[tr.dataset.i]);
     tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(); } };
@@ -547,20 +586,62 @@ async function build(info) {
   loadPatient();
   watchOrgans();
   watchMips();
+  // comparaison : on repart de la séance A seule ; si le serveur a déjà une séance B recalée, l'interface la reprend
+  cmpMode = "a"; $("cmpui").hidden = true; $("splitbox").hidden = true;
+  document.querySelector("input[name=cmp][value=a]").checked = true;
+  $("cbrowse").hidden = !info.browse;
+  $("cfolder").value = $("cfolder").value || (info.recent || []).find(f => f !== info.folder) || "";
+  watchCompare();
 }
 
 // MIP rotatif : le serveur calcule les images (tous les 10°) en arrière-plan ; lecture et curseur s'activent quand tout est prêt.
 let mipToken = 0, playTimer = 0;
 async function watchMips() {
   const my = ++mipToken, play = $("play"), s = sliders.mip;
-  s.disabled = true; play.disabled = true; play.textContent = "Calcul du MIP…";
+  mipsReady = false; syncMip(); play.textContent = "Calcul du MIP…";
   for (let k = 0; k < 300 && my === mipToken; k++) {
     const r = await (await fetch("/mips")).json();
-    if (r.ready >= r.total) { s.disabled = false; play.disabled = false; play.textContent = playTimer ? "Pause" : "Lecture"; return; }
+    if (r.ready >= r.total) { mipsReady = true; syncMip(); play.textContent = playTimer ? "Pause" : "Lecture"; return; }
     play.textContent = `Calcul du MIP… ${Math.round(100 * r.ready / r.total)} %`;
     await new Promise(r => setTimeout(r, 1000));
   }
 }
+// Le MIP tourné n'existe que pour la séance A : en comparaison, MIP de face seulement (curseur et lecture désactivés).
+function syncMip() {
+  const s = sliders.mip, off = cmpMode !== "a" || !mipsReady;
+  if (!s) return;
+  s.disabled = off; $("play").disabled = off;
+  if (cmpMode !== "a") {
+    if (playTimer) { clearInterval(playTimer); playTimer = 0; $("play").textContent = "Lecture"; }
+    if (+s.value !== 0) { s.value = 0; refreshView("mip"); }
+  }
+}
+
+// Comparaison de deux séances : B est chargée et recalée sur A par le serveur (quelques secondes) ; on suit sa progression.
+async function openCompare() {
+  const f = $("cfolder").value.trim();
+  if (!f) return;
+  const r = await (await fetch("/compare?folder=" + encodeURIComponent(f))).json();
+  if (r.error) { $("cmsg").textContent = r.error; return; }
+  watchCompare();
+}
+async function watchCompare() {
+  for (;;) {
+    const s = await (await fetch("/cstatus")).json();
+    if (s.status === "loading") { $("cmsg").textContent = s.message; await new Promise(r => setTimeout(r, 700)); continue; }
+    $("cmsg").textContent = s.status === "error" ? s.message : "";
+    $("cmpui").hidden = !s.ready;
+    if (s.ready) {
+      const mm = (s.shift_mm || []).map(v => String(v).replace(".", ",")).join(" ; ");
+      $("cinfo").textContent = `A : ${s.date_a || "?"}${s.weight_a ? " (" + s.weight_a + ")" : ""} · B : ${s.date_b || "?"}${s.weight_b ? " (" + s.weight_b + ")" : ""}. ` +
+        `B décalée de (z ; y ; x) = ${mm} mm` + (s.score != null ? `, corrélation du squelette ${String(s.score.toFixed(2)).replace(".", ",")}` : ", sans recalage (pas de CT)") +
+        ". Translation seule : la tête et les membres peuvent rester décalés. Les SUV ne sont comparables que si les conditions d'acquisition sont proches.";
+      rev++; lesions(); refresh();
+    }
+    return;
+  }
+}
+
 function togglePlay() {
   const play = $("play");
   if (playTimer) { clearInterval(playTimer); playTimer = 0; play.textContent = "Lecture"; return; }
@@ -629,6 +710,19 @@ $("vmax").oninput = $("cmap").onchange = $("alpha").oninput = refresh;
 $("mode").onchange = () => { if ($("mode").value === "ct" && !$("srcbox").hidden) $("src").value = "ct"; syncSrc(); refresh(); };
 $("src").onchange = syncSrc;
 $("orgs").onchange = refresh;
+// Comparaison : séance affichée (A, B, curseur A | B, différence A − B)
+document.querySelectorAll("input[name=cmp]").forEach(r => r.onchange = () => {
+  cmpMode = document.querySelector("input[name=cmp]:checked").value;
+  $("splitbox").hidden = cmpMode !== "swipe";
+  syncMip(); rev++; refresh();
+});
+$("split").oninput = () => { $("splitv").textContent = $("split").value; refresh(); };
+$("cload").onclick = openCompare;
+$("cfolder").onkeydown = e => { if (e.key === "Enter") openCompare(); };
+$("cbrowse").onclick = async () => {
+  const r = await (await fetch("/browse")).json();
+  if (r.folder) { $("cfolder").value = r.folder; openCompare(); }
+};
 // Couches : TEP (case) et CT (une série ou aucune). Le mode d'affichage s'en déduit : TEP + CT = fusion, TEP seul, CT seul.
 let curCt = "";  // série CT actuellement chargée par le serveur
 const ctChosen = () => document.querySelector("input[name=ctl]:checked")?.value || "";
@@ -672,7 +766,7 @@ $("browse").onclick = async () => {
 $("pdf").onclick = async () => {
   const state = {
     views: ["axial", "coronal", "sagittal"].map(v => ({ view: v, i: cur(v), z: zoom[v].z, x0: zoom[v].x0, y0: zoom[v].y0 })),
-    vmax: +$("vmax").value, cmap: $("cmap").value, mode: $("mode").value, alpha: +$("alpha").value, organs: $("orgs").checked,
+    vmax: +$("vmax").value, cmap: $("cmap").value, mode: $("mode").value, alpha: +$("alpha").value, organs: $("orgs").checked, cmp: cmpMode, split: $("split").value / 100,
     measures: ms.map(m => ({ v: m.v, i: m.i, text: m.text, items: m.items })),
   };
   $("pdf").disabled = true;

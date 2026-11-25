@@ -19,6 +19,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
+from compare import estimate_shift, shift_volume
 from export_pdf import build_pdf
 from organs import ORGANS, segment_organs
 from patient import read_patient_info
@@ -40,7 +41,7 @@ def demo():
     return suv, (3.0, 3.0, 3.0), ctv.astype(np.int16)
 
 
-CMAPS = {"hot", "jet", "gray_r"}
+CMAPS = {"hot", "jet", "gray_r", "bwr"}  # bwr : échelle divergente de la différence entre séances
 
 
 def bar(cmap):
@@ -61,6 +62,35 @@ def _slice(vol, view, i):
     return img if view == "axial" else img[::-1]  # tête en haut
 
 
+def _shift2d(img, dr, dc, fill):
+    """out[r, c] = img[r+dr, c+dc] ; `fill` hors de l'image."""
+    if dr == 0 and dc == 0:
+        return img
+    out = np.full_like(img, fill)
+    r0, r1 = max(0, -dr), min(img.shape[0], img.shape[0] - dr)
+    c0, c1 = max(0, -dc), min(img.shape[1], img.shape[1] - dc)
+    if r1 > r0 and c1 > c0:
+        out[r0:r1, c0:c1] = img[r0 + dr:r1 + dr, c0 + dc:c1 + dc]
+    return out
+
+
+def _slice_off(vol, view, i, off, fill=0):
+    """Comme `_slice` pour un volume décalé de off = (dz, dy, dx) voxels : out[z, y, x] = vol[z+dz, y+dy, x+dx]
+    (même convention que `compare.shift_volume`, mais sans copier le volume : on ne décale que la coupe affichée)."""
+    if not any(off):
+        return _slice(vol, view, i)
+    if view == "mip":
+        return _shift2d(vol.max(axis=1), off[0], off[2], fill)[::-1]
+    ax = AXIS[view]
+    k = i + off[ax]
+    if 0 <= k < vol.shape[ax]:
+        rest = [off[a] for a in range(3) if a != ax]
+        img = _shift2d(np.take(vol, k, axis=ax), rest[0], rest[1], fill)
+    else:  # coupe hors du volume décalé
+        img = np.full(tuple(n for a, n in enumerate(vol.shape) if a != ax), fill, vol.dtype)
+    return img if view == "axial" else img[::-1]
+
+
 def _up(img, view, spacing, box=(0, 0, 1), order=3):
     """Rééchantillonnage cubique à l'espacement réel des voxels (spacing en mm, z,y,x).
     box = (x0, y0, w) : on ne garde que ce carré (fractions de l'image entière) et il remplit
@@ -75,7 +105,7 @@ def _up(img, view, spacing, box=(0, 0, 1), order=3):
                                     offset=[y0 * nr - 0.5 + sr / 2, x0 * nc - 0.5 + sc / 2])
 
 
-def measure(suv, spacing, view, i, fx, fy, pct, ctv=None, source="pet", tol=50, mip=None):
+def measure(suv, spacing, view, i, fx, fy, pct, ctv=None, source="pet", tol=50, mip=None, off=(0, 0, 0)):
     """Mesure auto autour du point (fx, fy), fractions de l'image entière ; résultats en fractions.
     source "pet" : région >= pct % du max local ; source "ct" : région à ± tol HU du HU local.
     mip : image d'un MIP tourné (spacing alors celui de cette image) ; le MIP est toujours mesuré sur le TEP."""
@@ -83,7 +113,8 @@ def measure(suv, spacing, view, i, fx, fy, pct, ctv=None, source="pet", tol=50, 
         source = "pet"
     if source == "ct" and ctv is None:
         return {"error": "pas de CT dans ce dossier"}
-    img = mip if (view == "mip" and mip is not None) else _slice(ctv if source == "ct" else suv, view, i)
+    img = mip if (view == "mip" and mip is not None) else _slice_off(ctv if source == "ct" else suv, view, i, off,
+                                                                      -1000 if source == "ct" else 0)
     nr, nc = img.shape
     rr, cc = ROWCOL[view]
     r, c = min(nr - 1, max(0, int(fy * nr))), min(nc - 1, max(0, int(fx * nc)))
@@ -125,6 +156,22 @@ def _organs_overlay(rgb, lab):
     return rgb
 
 
+def _add_b(lesions, bsuv, spacing, radius_mm=12, rel=(0, 0, 0)):
+    """Évolution des lésions : pour chacune (séance A), SUVmax de la séance B autour du même point et variation en %.
+    Le recalage est approximatif (translation seule) : on cherche le max dans un rayon de `radius_mm`.
+    rel = décalage manuel de B moins celui de A (voxels) : le point de B correspondant au pic p de A est p + rel."""
+    r = [max(1, round(radius_mm / s)) for s in spacing]
+    for lesion in lesions:
+        z, y, x = (p + d for p, d in zip(lesion["peak"], rel))
+        lo = [max(0, c - n) for c, n in zip((z, y, x), r)]
+        hi = [max(0, c + n + 1) for c, n in zip((z, y, x), r)]  # max(0, …) : une fenêtre entièrement hors volume reste vide
+        win = bsuv[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]
+        sb = float(win.max()) if win.size else 0.0
+        lesion["suv_b"] = sb
+        lesion["delta_pct"] = (lesion["suv_max"] - sb) / sb * 100 if sb >= 0.5 else None
+    return lesions
+
+
 ANGLES = range(0, 360, 10)  # angles du MIP rotatif
 
 
@@ -132,8 +179,8 @@ def _angle(i):
     return round(i / 10) * 10 % 360
 
 
-def render(suv, view, i, vmax, cmap="jet", spacing=(1, 1, 1), ctv=None, mode="pet", alpha=0.6, box=(0, 0, 1), labels=None,
-           mip=None):
+def render_rgb(suv, view, i, vmax, cmap="jet", spacing=(1, 1, 1), ctv=None, mode="pet", alpha=0.6, box=(0, 0, 1), labels=None,
+           mip=None, off=(0, 0, 0)):
     """PNG d'une coupe (axial/coronal/sagittal) ou de la MIP coronale (toujours TEP seul). i est borné.
     mode : "pet", "ct" ou "fusion" (TEP en couleur sur CT ; opacité nulle à SUV 0, pleine dès 25 % de vmax).
     Fenêtre CT fixe -160..240 HU (tissus mous). labels : volume d'organes à superposer (sauf sur la MIP)."""
@@ -141,12 +188,13 @@ def render(suv, view, i, vmax, cmap="jet", spacing=(1, 1, 1), ctv=None, mode="pe
     show_ct = ctv is not None and mode in ("fusion", "ct") and view != "mip"
     show_organs = labels is not None and view != "mip"
     # les interpolations TEP et CT sont indépendantes : en parallèle (scipy libère le verrou Python)
-    pet_f = _POOL.submit(_up, mip if (view == "mip" and mip is not None) else _slice(suv, view, i), view, spacing, box)
-    ct_f = _POOL.submit(_up, _slice(ctv, view, i), view, spacing, box) if show_ct else None
+    # off : décalage manuel (dz, dy, dx) en voxels de CE volume (TEP, CT et organes bougent ensemble)
+    pet_f = _POOL.submit(_up, mip if (view == "mip" and mip is not None) else _slice_off(suv, view, i, off), view, spacing, box)
+    ct_f = _POOL.submit(_up, _slice_off(ctv, view, i, off, -1000), view, spacing, box) if show_ct else None
     pet = pet_f.result()
     idx = (np.clip(pet / vmax, 0, 1) * 255).astype(np.uint8)  # indice dans la palette
     if not (show_ct or show_organs):
-        return _png(_lut(cmap)[idx])
+        return _lut(cmap)[idx]
     if show_ct:
         img = np.clip((ct_f.result() + 160) * (255 / 400), 0, 255)[..., None] * np.ones(3, np.float32)
         if mode == "fusion":
@@ -155,8 +203,48 @@ def render(suv, view, i, vmax, cmap="jet", spacing=(1, 1, 1), ctv=None, mode="pe
     else:
         img = _lut(cmap)[idx].astype(np.float32)
     if show_organs:
-        img = _organs_overlay(img, np.rint(_up(_slice(labels, view, i), view, spacing, box, order=0)).astype(np.uint8))
-    return _png(np.clip(img, 0, 255).astype(np.uint8))
+        img = _organs_overlay(img, np.rint(_up(_slice_off(labels, view, i, off), view, spacing, box, order=0)).astype(np.uint8))
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
+def render(*args, **kw):
+    """PNG d'une coupe ; mêmes paramètres que `render_rgb`."""
+    return _png(render_rgb(*args, **kw))
+
+
+def _diff_rgb(a, b, view, i, vmax, spacing, box, alpha, oa=(0, 0, 0), ob=(0, 0, 0)):
+    """Différence de SUV (A − B) : bleu = baisse, rouge = hausse, sur le CT de A ; échelle ±vmax/2, opaque dès 10 % de l'échelle.
+    oa, ob : décalages manuels de chaque séance."""
+    diff = _up(_slice_off(a[0], view, i, oa).astype(np.float32) - _slice_off(b[0], view, i, ob), view, spacing, box)
+    dmax = vmax / 2
+    col = _lut("bwr")[((np.clip(diff / dmax, -1, 1) * 0.5 + 0.5) * 255).astype(np.uint8)].astype(np.float32)
+    if a[1] is not None and view != "mip":
+        base = np.clip((_up(_slice_off(a[1], view, i, oa, -1000), view, spacing, box) + 160) * (255 / 400), 0, 255)[..., None] * np.ones(3, np.float32)
+    else:
+        base = np.zeros(col.shape, np.float32)
+    w = (alpha * np.clip(np.abs(diff) / (0.1 * dmax), 0, 1))[..., None]
+    return np.clip(base * (1 - w) + col * w, 0, 255).astype(np.uint8)
+
+
+def render_study(a, b, cmp, split, view, i, vmax, cmap, spacing, mode, alpha, box, labels=None, mip=None,
+                 oa=(0, 0, 0), ob=(0, 0, 0)):
+    """Rendu avec comparaison. a, b : (suv, ctv) des deux séances (b déjà recalée sur la grille de a, ou None).
+    cmp : "a", "b", "swipe" (A à gauche du curseur `split` de 0 à 1, B à droite) ou "diff" (SUV A − B).
+    oa, ob : décalages manuels (dz, dy, dx) en voxels de chaque séance, indépendants.
+    Les organes et le MIP tourné ne concernent que la séance A."""
+    if b is None or cmp == "a" or mip is not None:
+        return _png(render_rgb(a[0], view, i, vmax, cmap, spacing, a[1], mode, alpha, box, labels, mip, oa))
+    if cmp == "b":
+        return _png(render_rgb(b[0], view, i, vmax, cmap, spacing, b[1], mode, alpha, box, None, None, ob))
+    if cmp == "diff":
+        return _png(_diff_rgb(a, b, view, i, vmax, spacing, box, alpha, oa, ob))
+    ra = render_rgb(a[0], view, i, vmax, cmap, spacing, a[1], mode, alpha, box, labels, None, oa)
+    out = render_rgb(b[0], view, i, vmax, cmap, spacing, b[1], mode, alpha, box, None, None, ob)
+    x = int(round(split * out.shape[1]))
+    out[:, :x] = ra[:, :x]
+    if 0 < x < out.shape[1]:
+        out[:, max(0, x - 1):x + 1] = 255  # trait de séparation
+    return _png(out)
 
 
 # --- dossiers récents et sélecteur natif ---
@@ -195,13 +283,16 @@ class State:
         self.organs = None  # (labels, infos) des organes du volume courant, calculés en arrière-plan
         self.mips = None    # {angle: image} du MIP tourné, remplie en arrière-plan
         self.cts = None     # séries CT du dossier : {series, origin, choices, uid}
+        self.cmp = None     # séance B recalée sur la grille de A : {suv, ctv, patient, folder, shift, score}
+        self.cmp_status, self.cmp_message = "idle", ""
         self._ctcache = {}  # {uid: CT rééchantillonné} : un changement de série déjà chargée est instantané
         self._orgcache = {} # {uid: (labels, infos)} : idem pour les organes
         self.status, self.message = "idle", ""
         self._lock = threading.Lock()
 
     def set(self, suv, spacing, ctv, patient=None, folder=""):
-        self.organs = self.mips = self.cts = None
+        self.organs = self.mips = self.cts = self.cmp = None
+        self.cmp_status, self.cmp_message = "idle", ""
         self._ctcache, self._orgcache = {}, {}
         self.vol = (suv, spacing, ctv, patient or {}, folder)
         self.status, self.message = "ready", ""
@@ -289,6 +380,42 @@ class State:
                 except Exception:
                     pass
 
+    def open_compare(self, folder):
+        """Charge une 2e séance du même patient et la recale sur la grille de la séance courante (en arrière-plan).
+        False s'il n'y a pas de volume ou si un chargement de séance B est déjà en cours."""
+        with self._lock:
+            if self.vol is None or self.cmp_status == "loading":
+                return False
+            self.cmp_status, self.cmp_message = "loading", "Chargement de la séance B…"
+        threading.Thread(target=self._load_compare, args=(folder, self.vol), daemon=True).start()
+        return True
+
+    def _load_compare(self, folder, vol):
+        try:
+            suv, spacing, origin = load_suv(folder)
+            if any(abs(a - b) > 0.1 * a for a, b in zip(vol[1], spacing)):
+                raise SystemExit("Grilles incompatibles : espacement " + " × ".join(f"{s:.2f}" for s in spacing) +
+                                 " mm contre " + " × ".join(f"{s:.2f}" for s in vol[1]) + " mm")
+            series = ct_series(folder)
+            ctb = load_ct(folder, suv.shape, spacing, origin, default_ct_uid(series, origin) if series else None, series)
+            patient = read_patient_info(folder)
+            if vol[2] is None or ctb is None:
+                shift, score = (0, 0, 0), None  # pas de CT pour recaler : on garde l'alignement des grilles, sans recalage
+            else:
+                self.cmp_message = "Recalage des deux séances…"
+                shift, score = estimate_shift(vol[2], ctb)
+            shift = tuple(int(s) for s in shift)
+            aligned = (shift_volume(suv, shift, vol[0].shape, 0.0),
+                       shift_volume(ctb, shift, vol[0].shape, -1000) if ctb is not None else None)
+        except SystemExit as e:
+            self.cmp_status, self.cmp_message = "error", str(e)
+        except Exception as e:
+            self.cmp_status, self.cmp_message = "error", f"{type(e).__name__} : {e}"
+        else:
+            if self.vol is vol:  # la séance A n'a pas changé pendant le calcul
+                self.cmp = {"suv": aligned[0], "ctv": aligned[1], "patient": patient, "folder": folder, "shift": shift, "score": score}
+                self.cmp_status, self.cmp_message = "ready", ""
+
     def open(self, folder):
         """Lance le chargement ; False si un chargement est déjà en cours."""
         with self._lock:
@@ -366,7 +493,7 @@ def make_handler(state):
         def do_GET(self):
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
-            if not self._allowed(u.path in ("/open", "/browse", "/ctseries")):
+            if not self._allowed(u.path in ("/open", "/browse", "/ctseries", "/compare")):
                 return self.send_error(403)
             vol = state.vol  # lu une seule fois : cohérent même si un chargement termine entre-temps
             try:
@@ -385,6 +512,18 @@ def make_handler(state):
                 if u.path == "/ctseries":
                     started = state.open_ct(q["uid"])
                     return self._json({"error": "Série CT inconnue"}, 400) if started is None else self._json({"started": started})
+                if u.path == "/compare":  # charge une 2e séance du même patient et la recale sur la séance courante
+                    folder = q["folder"]
+                    if not Path(folder).is_dir():
+                        return self._json({"error": f"Dossier introuvable : {folder}"}, 400)
+                    return self._json({"started": state.open_compare(folder)})
+                if u.path == "/cstatus":
+                    c, pa = state.cmp, (vol[3] if vol else {})
+                    return self._json({"status": state.cmp_status, "message": state.cmp_message, "ready": c is not None,
+                                       "date_a": pa.get("Date de l'examen"), "date_b": c["patient"].get("Date de l'examen") if c else None,
+                                       "weight_a": pa.get("Poids"), "weight_b": c["patient"].get("Poids") if c else None,
+                                       "shift_mm": [round(s * v, 1) for s, v in zip(c["shift"], vol[1])] if c and vol else None,
+                                       "score": c["score"] if c else None})
                 if u.path == "/mips":  # avancement du calcul du MIP rotatif (l'angle 0 est toujours disponible)
                     return self._json({"ready": 0 if state.mips is None else len(state.mips) + 1, "total": len(ANGLES)})
                 if u.path == "/bar" and q.get("cmap") in CMAPS:
@@ -401,7 +540,8 @@ def make_handler(state):
                 if u.path == "/patient":
                     return self._json(patient)
                 if u.path == "/lesions":
-                    return self._json(analyze(suv, float(np.prod(spacing)) / 1000, float(q["thr"])))
+                    les = analyze(suv, float(np.prod(spacing)) / 1000, float(q["thr"]))
+                    return self._json(_add_b(les, state.cmp["suv"], spacing) if state.cmp else les)
                 if u.path == "/img":
                     cmap, mode = q.get("cmap", "jet"), q.get("mode", "pet")
                     z = float(q.get("z", 1))
@@ -409,17 +549,26 @@ def make_handler(state):
                         return self.send_error(400)
                     w = 1 / z
                     box = tuple(min(max(float(q.get(k, 0)), 0), 1 - w) for k in ("x0", "y0")) + (w,)
-                    org = state.organs
-                    frame, sp = self._mip_source(q, spacing)
+                    org, cmpd, cmpmode = state.organs, state.cmp, q.get("cmp", "a")
+                    if cmpmode not in ("a", "b", "swipe", "diff"):
+                        return self.send_error(400)
+                    if cmpd is None:
+                        cmpmode = "a"
+                    if cmpmode != "a" and q["view"] == "mip":
+                        frame, sp = None, spacing  # le MIP tourné n'existe que pour la séance A : en comparaison, MIP de face
+                    else:
+                        frame, sp = self._mip_source(q, spacing)
                     if frame is False:
                         return self._json({"error": "MIP en cours de calcul"}, 503)
+                    split = round(min(max(float(q.get("split", 0.5)), 0), 1), 3)
+                    b = (cmpd["suv"], cmpd["ctv"]) if cmpd else None
                     labels = org[0] if q.get("organs") == "1" and org else None
-                    i = _angle(int(q["i"])) if q["view"] == "mip" else int(q["i"])
-                    key = (q["view"], i, float(q["vmax"]), cmap, mode, float(q.get("alpha", 0.6)), box,
-                           id(suv), id(ctv), id(labels))  # un autre volume, CT ou jeu d'organes = une autre clé
-                    return self._send(cached(key, lambda: render(suv, q["view"], int(q["i"]), float(q["vmax"]), cmap, sp,
-                                                                 ctv, mode, float(q.get("alpha", 0.6)), box, labels, frame)),
-                                      "image/png")
+                    i = (_angle(int(q["i"])) if cmpmode == "a" else 0) if q["view"] == "mip" else int(q["i"])
+                    key = (q["view"], i, float(q["vmax"]), cmap, mode, float(q.get("alpha", 0.6)), box, id(suv), id(ctv),
+                           id(labels), cmpmode, split if cmpmode == "swipe" else 0, id(b[0]) if b else 0)
+                    return self._send(cached(key, lambda: render_study(
+                        (suv, ctv), b, cmpmode, split, q["view"], int(q["i"]), float(q["vmax"]), cmap, sp, mode,
+                        float(q.get("alpha", 0.6)), box, labels, frame)), "image/png")
                 if u.path == "/organs":
                     org = state.organs
                     return self._json({"status": "unavailable" if ctv is None else "ready" if org else "computing",
@@ -433,11 +582,13 @@ def make_handler(state):
                                   min(lab.shape[1] - 1, max(0, int(float(q["fx"]) * lab.shape[1])))])
                     return self._json({"nom": ORGANS[oid][0]} if oid in ORGANS else {})
                 if u.path == "/measure":
-                    frame, sp = self._mip_source(q, spacing)
+                    cmpd = state.cmp if q.get("cmp") == "b" else None  # mesure sur la séance B (déjà recalée) ou sur A
+                    suv_m, ctv_m = (cmpd["suv"], cmpd["ctv"]) if cmpd else (suv, ctv)
+                    frame, sp = (None, spacing) if (cmpd and q["view"] == "mip") else self._mip_source(q, spacing)
                     if frame is False:
                         return self._json({"error": "MIP en cours de calcul"})
-                    return self._json(measure(suv, sp, q["view"], int(q["i"]), float(q["fx"]), float(q["fy"]),
-                                              float(q.get("pct", 50)), ctv, q.get("source", "pet"), float(q.get("tol", 50)), frame))
+                    return self._json(measure(suv_m, sp, q["view"], int(q["i"]), float(q["fx"]), float(q["fy"]),
+                                              float(q.get("pct", 50)), ctv_m, q.get("source", "pet"), float(q.get("tol", 50)), frame))
                 return self.send_error(404)
             except (KeyError, ValueError):
                 return self.send_error(400)
@@ -461,8 +612,11 @@ def make_handler(state):
                     raise ValueError("réglage inconnu")
                 org = state.organs
                 labels = org[0] if st.get("organs") and org else None  # surcouche d'organes comme à l'écran
+                cmpd = state.cmp  # comparaison de séances : le PDF reproduit l'affichage (A, B, curseur ou différence)
+                cm = st.get("cmp") if cmpd and st.get("cmp") in ("a", "b", "swipe", "diff") else "a"
+                split, b = float(st.get("split", 0.5)), ((cmpd["suv"], cmpd["ctv"]) if cmpd else None)
                 pdf = build_pdf(lambda view, i, vmax, cmap, mode, alpha, box:
-                                render(suv, view, i, vmax, cmap, spacing, ctv, mode, alpha, box, labels),
+                                render_study((suv, ctv), b, cm, split, view, i, vmax, cmap, spacing, mode, alpha, box, labels),
                                 suv.shape, st, req.get("patient") or {})
             except (KeyError, ValueError, TypeError, AttributeError):
                 return self.send_error(400)

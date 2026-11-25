@@ -137,3 +137,27 @@ def test_rotating_mip_frames_routes_and_measure():
         assert _get(srv, "/ctseries?uid=inconnue")[0] == 400
     finally:
         srv.shutdown()
+
+
+def test_compare_modes_lesions_status_and_measure():
+    suv, spacing, ctv = demo()
+    state = State()
+    state.set(suv, spacing, ctv)
+    assert json.loads(_get(_server(state), "/cstatus")[1])["ready"] is False
+    state.cmp = {"suv": suv * 0.5, "ctv": ctv, "patient": {"Date de l'examen": "04/09/2026"}, "folder": "b",
+                 "shift": (1, 0, 0), "score": 0.7}  # séance B : moitié moins de captation, déjà recalée
+    srv = _server(state)
+    try:
+        imgs = {m: _get(srv, f"/img?view=axial&i=30&vmax=10&mode=fusion&cmp={m}&split=0.5")[1] for m in ("a", "b", "swipe", "diff")}
+        assert all(v.startswith(PNG) for v in imgs.values()) and len(set(imgs.values())) == 4  # 4 rendus différents
+        assert _get(srv, "/img?view=mip&i=90&vmax=10&cmp=diff")[0] == 200   # MIP de face en comparaison
+        assert _get(srv, "/img?view=axial&i=30&vmax=10&cmp=nimporte")[0] == 400
+        les = json.loads(_get(srv, "/lesions?thr=4")[1])
+        assert les[0]["suv_b"] == 4.5 and abs(les[0]["delta_pct"] - 100) < 1e-6     # 9 contre 4,5 : +100 %
+        cs = json.loads(_get(srv, "/cstatus")[1])
+        assert cs["ready"] and cs["date_b"] == "04/09/2026" and cs["shift_mm"] == [3.0, 0.0, 0.0] and cs["score"] == 0.7
+        r = json.loads(_get(srv, "/measure?view=axial&i=30&fx=0.5&fy=0.5&pct=50&cmp=b")[1])
+        assert r["suv_max"] <= 4.6                                                  # mesurée sur B, pas sur A
+        assert _get(srv, "/compare?folder=/dossier/inexistant")[0] == 400
+    finally:
+        srv.shutdown()
