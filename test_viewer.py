@@ -198,3 +198,29 @@ def test_manual_offsets_slice_semantics_lesions_and_routes():
         assert "error" not in r
     finally:
         srv.shutdown()
+
+
+def test_autoalign_route_global_local_and_errors():
+    import numpy as np
+    from compare import shift_volume
+    from test_compare import phantom
+    ct = phantom()
+    suv = np.ones(ct.shape, np.float32)
+    true_e = (2, -4, 6)  # B décalée de true_e : b[x + e] = a[x]
+    b_ct = shift_volume(ct, tuple(-v for v in true_e), ct.shape, -1000)
+    state = State()
+    state.set(suv, (4.0, 4.0, 4.0), ct)
+    srv = _server(state)
+    try:
+        assert "error" in json.loads(_get(srv, "/autoalign?scope=global")[1])        # pas de séance B
+        state.cmp = {"suv": suv, "ctv": b_ct, "patient": {}, "folder": "b", "shift": (0, 0, 0), "score": None}
+        g = json.loads(_get(srv, "/autoalign?scope=global")[1])
+        assert all(abs(x - w) <= 3 for x, w in zip(g["e"], true_e)) and g["score"] > 0.5, g   # pas de 3 voxels
+        loc = json.loads(_get(srv, "/autoalign?scope=local&c=40,45,45")[1])
+        assert loc["e"] == list(true_e) and loc["ob"] == list(true_e), loc                  # au voxel près
+        # en repartant d'un décalage déjà correct : résidu nul
+        again = json.loads(_get(srv, "/autoalign?scope=local&c=40,45,45&ob=2,-4,6")[1])
+        assert again["e"] == [0, 0, 0] and again["ob"] == [2, -4, 6]
+        assert _get(srv, "/autoalign?scope=local&c=1,2")[0] == 400                          # centre mal formé
+    finally:
+        srv.shutdown()

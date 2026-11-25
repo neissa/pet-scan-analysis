@@ -19,7 +19,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
-from compare import estimate_shift, shift_volume
+from compare import estimate_shift, refine_shift, shift_volume
 from export_pdf import build_pdf
 from organs import ORGANS, segment_organs
 from patient import read_patient_info
@@ -501,7 +501,7 @@ def make_handler(state):
         def do_GET(self):
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
-            if not self._allowed(u.path in ("/open", "/browse", "/ctseries", "/compare")):
+            if not self._allowed(u.path in ("/open", "/browse", "/ctseries", "/compare", "/autoalign")):
                 return self.send_error(403)
             vol = state.vol  # lu une seule fois : cohérent même si un chargement termine entre-temps
             try:
@@ -545,6 +545,20 @@ def make_handler(state):
                     return self._json({"loaded": True, "shape": suv.shape, "spacing": spacing, "suv_max": float(suv.max()),
                                        "ct": ctv is not None, "folder": folder, "browse": BROWSE, "recent": recent(),
                                        "ct_series": (state.cts or {}).get("choices", []), "ct_uid": (state.cts or {}).get("uid")})
+                if u.path == "/autoalign":
+                    # Aligne B sur A à partir des décalages manuels actuels : renvoie le nouveau décalage de B (convention du serveur)
+                    # et le résidu e. scope=local : zone de ±70 mm autour des coupes affichées (c = z,y,x), au voxel près ;
+                    # scope=global : volume entier, au pas de 3 voxels.
+                    cb = state.cmp
+                    if cb is None or ctv is None or cb["ctv"] is None:
+                        return self._json({"error": "L'alignement automatique demande le CT des deux séances."})
+                    da, db = self._off(q, "oa"), self._off(q, "ob")
+                    if q.get("scope") == "local":
+                        c = self._off(q, "c")
+                        e, score = refine_shift(ctv, cb["ctv"], da, db, c, tuple(max(8, round(70 / s)) for s in spacing), step=1, margin=14)
+                    else:
+                        e, score = refine_shift(ctv, cb["ctv"], da, db, step=3, margin=10)
+                    return self._json({"ob": [d + x for d, x in zip(db, e)], "e": list(e), "score": score})
                 if u.path == "/patient":
                     return self._json(patient)
                 if u.path == "/lesions":

@@ -39,3 +39,17 @@ def test_aligned_volume_matches_reference():
     aligned = shift_volume(b, d, a.shape, fill=-1000)
     inside = (a > 0)
     assert (aligned[inside] == a[inside]).mean() > 0.9   # le squelette redevient superposable
+
+
+def test_refine_shift_recovers_residual_offset_global_and_local():
+    from compare import refine_shift
+    a = phantom()
+    true_e = (2, -4, 6)                      # B décalée de true_e par rapport à A
+    b = shift_volume(a, (-true_e[0], -true_e[1], -true_e[2]), a.shape, fill=-1000)   # b[x] = a[x - e]  =>  b[x + e] = a[x]
+    e, score = refine_shift(a, b, step=2, margin=6)
+    assert all(abs(g - w) <= 2 for g, w in zip(e, true_e)) and score > 0.5, (e, score)
+    e2, score2 = refine_shift(a, b, center=(40, 45, 45), half=(30, 30, 30), step=1, margin=10)   # zone locale, pas de 1 voxel
+    assert e2 == true_e and score2 > 0.5, (e2, score2)
+    # on part des décalages actuels : si B est déjà décalée de e, le résidu est nul
+    e3, _ = refine_shift(a, b, db=true_e, step=1, margin=6, center=(40, 45, 45), half=(30, 30, 30))
+    assert e3 == (0, 0, 0)

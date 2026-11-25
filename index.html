@@ -46,12 +46,15 @@
   .seg input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 1px; }
 
   /* Mise en page : vues à gauche, inspecteur à droite */
-  .app { display: grid; grid-template-columns: minmax(0, 1fr) 320px; height: calc(100% - 52px); }
+  :root { --insp: clamp(400px, 34vw, 560px); }   /* largeur du panneau de droite (réglable en glissant son bord) */
+  .app { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) var(--insp); height: calc(100% - 52px); }
+  #grip { position: absolute; top: 0; bottom: 0; right: calc(var(--insp) - 3px); width: 7px; cursor: col-resize; z-index: 4; touch-action: none; }
+  #grip:hover, #grip:active { background: var(--accent); opacity: .6; }
   main { overflow: auto; padding: 16px; }
   .inspector { overflow: auto; border-left: 1px solid var(--line); background: var(--surface); padding: 4px 16px 24px; }
 
   /* Vues : même hauteur affichée (--vh), largeur selon le rapport d'aspect physique de chaque image */
-  main { --vh: min(calc(100vh - 150px), calc((100vw - 320px - 32px - 36px) / 3.1)); }
+  main { --vh: min(calc(100vh - 150px), calc((100vw - var(--insp) - 32px - 36px) / 3.1)); }
   .views, .miprow { display: flex; gap: 12px; align-items: flex-start; }
   .miprow { margin-top: 20px; }            /* MIP rotatif sur sa propre ligne */
   .miptools { display: flex; flex-direction: column; gap: 8px; max-width: 220px; align-self: center; }
@@ -170,6 +173,11 @@
         <div id="cinfo" class="hint"></div>
         <details id="offsec" class="subsec">
           <summary>Alignement fin : décaler chaque séance</summary>
+          <div class="btns">
+            <button id="autoalign" class="primary" title="Cherche le décalage qui superpose le mieux le squelette de B sur celui de A">Aligner B sur A (auto)</button>
+            <select id="aascope" aria-label="Zone d'alignement"><option value="local">Autour de l'affichage</option><option value="global">Corps entier</option></select>
+          </div>
+          <div id="aamsg" class="hint" role="status"></div>
           <div id="offs"></div>
           <p class="hint">Chaque séance se décale séparément, en voxels (1 voxel ≈ 1,6 mm en x et y, 2,1 mm en z). Le tableau des lésions,
             les mesures et le PDF en tiennent compte. Les curseurs se règlent à la molette (Maj = ×10).</p>
@@ -214,6 +222,7 @@
     <p class="note">Recherche uniquement, pas un dispositif médical. Molette sur une image : zoom centré sur la souris ;
       molette sur un curseur : ajuste sa valeur (Maj = ×10). Une loupe ×4 suit la souris avec la règle et la mesure auto.</p>
   </aside>
+  <div id="grip" role="separator" aria-orientation="vertical" title="Glisser pour élargir ou réduire le panneau"></div>
 </div>
 
 <div id="tip" hidden></div>
@@ -637,6 +646,26 @@ function offLabel(s, k) {
 function zeroOffsets(s = null) {
   for (const t of s ? [s] : ["A", "B"]) for (let k = 0; k < 3; k++) { off[t][k] = 0; $(`o${t}${k}`).value = 0; offLabel(t, k); }
 }
+// Alignement automatique de B sur A (A reste fixe) : le serveur renvoie le nouveau décalage de B, on règle les curseurs.
+// « Autour de l'affichage » : zone de ±70 mm autour des coupes affichées (précis au voxel) ; « Corps entier » : tout le volume.
+async function autoAlign() {
+  const btn = $("autoalign"), local = $("aascope").value === "local";
+  btn.disabled = true; $("aamsg").textContent = "Alignement en cours…";
+  try {
+    const r = await (await fetch(`/autoalign?scope=${local ? "local" : "global"}&c=${cur("axial")},${cur("coronal")},${cur("sagittal")}` +
+                                 `&oa=${offParam("A")}&ob=${offParam("B")}`)).json();
+    if (r.error) { $("aamsg").textContent = r.error; return; }
+    const val = r.ob.map(v => -v), limited = val.some(v => Math.abs(v) > 40);
+    for (let k = 0; k < 3; k++) { off.B[k] = clamp(val[k], -40, 40); $(`oB${k}`).value = off.B[k]; offLabel("B", k); }
+    const sc = String(r.score.toFixed(2)).replace(".", ",");
+    $("aamsg").textContent = `B ${r.e.every(v => v === 0) ? "déjà alignée" : "recalée de (z ; y ; x) = " + r.e.map(v => -v).join(" ; ") + " voxels"}` +
+      ` — corrélation du squelette ${sc}` + (r.score < 0.3 ? " (faible : peu d'os dans la zone, essayez « Corps entier » ou une autre coupe)" : "") +
+      (limited ? ". Décalage limité à ±40 voxels." : ".");
+    offChanged();
+  } catch (e) { $("aamsg").textContent = "Alignement impossible : " + e.message; }
+  finally { btn.disabled = false; }
+}
+
 let offT = 0;
 function offChanged() {
   refresh(); drawAll();
@@ -756,6 +785,7 @@ document.querySelectorAll("input[name=cmp]").forEach(r => r.onchange = () => {
 });
 $("split").oninput = () => { $("splitv").textContent = $("split").value; refresh(); };
 $("cload").onclick = openCompare;
+$("autoalign").onclick = autoAlign;
 $("cfolder").onkeydown = e => { if (e.key === "Enter") openCompare(); };
 $("cbrowse").onclick = async () => {
   const r = await (await fetch("/browse")).json();
@@ -823,6 +853,18 @@ $("reset").onclick = () => { for (const [v] of views) zoom[v] = { z: 1, x0: 0, y
 $("clear").onclick = () => { ms.length = 0; pending = null; marker = null; showRes(); drawAll(); };
 document.querySelectorAll("input[name=tool]").forEach(r => r.onchange = () => { pending = null; showRes(); drawAll(); updateLoupe(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") { pending = null; showRes(); drawAll(); } });
+// Panneau de droite redimensionnable : on glisse son bord gauche ; la largeur choisie est mémorisée dans le navigateur.
+const setInsp = w => { document.documentElement.style.setProperty("--insp", clamp(w, 320, 760) + "px"); drawAll(); };
+if (localStorage.getItem("insp")) setInsp(+localStorage.getItem("insp"));
+$("grip").onpointerdown = e => {
+  e.preventDefault(); $("grip").setPointerCapture(e.pointerId);
+  $("grip").onpointermove = ev => setInsp(innerWidth - ev.clientX);
+  $("grip").onpointerup = () => {
+    $("grip").onpointermove = null;
+    localStorage.setItem("insp", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--insp")));
+  };
+};
+window.addEventListener("resize", drawAll);  // les images changent de taille avec la fenêtre : les mesures se redessinent
 buildOffsets();
 start();
 </script>
