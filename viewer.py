@@ -172,6 +172,28 @@ def _add_b(lesions, bsuv, spacing, radius_mm=12, rel=(0, 0, 0)):
     return lesions
 
 
+def _organ_at_peak(labels, spacing, peak, radius_mm=15):
+    """Organe du pic (« dans X ») ou organe le plus proche à ≤ radius_mm (« près de X », squelette exclu), sinon None.
+    Calcul local : seule la fenêtre autour du pic est lue, pas tout le volume."""
+    oid = int(labels[tuple(peak)])
+    if oid in ORGANS:
+        return f"dans {ORGANS[oid][0]}"
+    r = [int(np.ceil(radius_mm / s)) for s in spacing]
+    lo = [max(0, c - n) for c, n in zip(peak, r)]
+    hi = [min(m, c + n + 1) for c, n, m in zip(peak, r, labels.shape)]
+    win = labels[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]
+    centre = np.array(peak) - lo
+    best = None
+    for k in np.unique(win):
+        if int(k) not in ORGANS or k == 10:  # le squelette est trop répandu pour dire « près de »
+            continue
+        pts = np.argwhere(win == k)
+        d = float(np.sqrt((((pts - centre) * spacing) ** 2).sum(axis=1).min()))  # distance en mm au voxel le plus proche
+        if d <= radius_mm and (best is None or d < best[0]):
+            best = (d, int(k))
+    return f"près de {ORGANS[best[1]][0]}" if best else None
+
+
 ANGLES = range(0, 360, 10)  # angles du MIP rotatif
 
 
@@ -563,7 +585,11 @@ def make_handler(state):
                     return self._json(patient)
                 if u.path == "/lesions":
                     les = analyze(suv, float(np.prod(spacing)) / 1000, float(q["thr"]))
-                    rel = tuple(b - a for a, b in zip(self._off(q, "oa"), self._off(q, "ob")))  # B relativement à A
+                    org = state.organs  # organes pas encore calculés : pas de champ « organe », l'interface relance /lesions
+                    if org is not None:
+                        for lesion in les:
+                            lesion["organe"] = _organ_at_peak(org[0], spacing, lesion["peak"])
+                    rel =tuple(b - a for a, b in zip(self._off(q, "oa"), self._off(q, "ob")))  # B relativement à A
                     return self._json(_add_b(les, state.cmp["suv"], spacing, rel=rel) if state.cmp else les)
                 if u.path == "/img":
                     cmap, mode = q.get("cmap", "jet"), q.get("mode", "pet")

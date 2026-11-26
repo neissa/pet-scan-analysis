@@ -200,6 +200,43 @@ def test_manual_offsets_slice_semantics_lesions_and_routes():
         srv.shutdown()
 
 
+def test_lesion_organ_location_dans_pres_de_loin_et_absence():
+    import numpy as np
+    from viewer import _organ_at_peak
+    spacing = (3.0, 2.0, 2.0)  # z anisotrope : la distance doit être calculée en mm
+    suv = np.zeros((40, 40, 40), np.float32)
+    lab = np.zeros(suv.shape, np.uint8)
+    peaks = {"dans": (10, 10, 10), "pres": (20, 10, 10), "loin": (30, 30, 30), "bord": (5, 30, 30)}
+    for p in peaks.values():
+        suv[p] = 5.0
+    lab[9:12, 9:12, 9:12] = 4      # Foie : contient le pic « dans »
+    lab[20, 10, 15] = 6            # Rein droit : 5 voxels en x = 10 mm du pic « près de »
+    lab[20, 10, 11] = 10           # squelette à 2 mm : ignoré (trop répandu)
+    lab[31, 30, 30] = 10           # squelette à 3 mm du pic « loin » : ignoré
+    lab[30, 30, 38] = 9            # Cerveau à 8 voxels en x = 16 mm : trop loin
+    lab[10, 30, 30] = 5            # Rate à 5 voxels en z = 15 mm : limite incluse
+    assert _organ_at_peak(lab, spacing, peaks["dans"]) == "dans Foie"
+    assert _organ_at_peak(lab, spacing, peaks["pres"]) == "près de Rein droit"
+    assert _organ_at_peak(lab, spacing, peaks["loin"]) is None
+    assert _organ_at_peak(lab, spacing, peaks["bord"]) == "près de Rate"
+    state = State()
+    state.set(suv, spacing, None)
+    srv = _server(state)
+    try:
+        les = json.loads(_get(srv, "/lesions?thr=2.5")[1])
+        assert len(les) == 4 and all("organe" not in l for l in les)      # organes pas encore calculés : champ absent
+        state.organs = (lab, {})
+        state.cmp = {"suv": suv * 0.5, "ctv": None, "patient": {}, "folder": "b", "shift": (0, 0, 0), "score": None}
+        les = {tuple(l["peak"]): l for l in json.loads(_get(srv, "/lesions?thr=2.5")[1])}
+        assert les[peaks["dans"]]["organe"] == "dans Foie"
+        assert les[peaks["pres"]]["organe"] == "près de Rein droit"
+        assert les[peaks["loin"]]["organe"] is None
+        assert les[peaks["bord"]]["organe"] == "près de Rate"
+        assert les[peaks["pres"]]["suv_max"] == 5.0 and les[peaks["pres"]]["suv_b"] == 2.5  # champs existants intacts
+    finally:
+        srv.shutdown()
+
+
 def test_autoalign_route_global_local_and_errors():
     import numpy as np
     from compare import shift_volume
