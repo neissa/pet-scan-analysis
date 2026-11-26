@@ -14,17 +14,26 @@
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   html, body { height: 100%; }
-  body { margin: 0; background: var(--bg); color: var(--label); font: 13px/1.4 var(--font); accent-color: #0a84ff; }
+  body { margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--label); font: 13px/1.4 var(--font); accent-color: #0a84ff; }
   b, th { font-weight: 600; }
   :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
 
-  /* Barre d'outils : dossier à gauche, outil au centre, action principale à droite */
-  .toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 16px; height: 52px; padding: 0 16px;
+  /* En-tête : dossiers des séances A et B côte à côte, action principale à droite ; dessous, la barre d'outils */
+  .toolbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-height: 52px; padding: 8px 16px;
              background: var(--surface); border-bottom: 1px solid var(--line); }
   .tb-lead, .tb-trail { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 0; }
-  .tb-trail { justify-content: flex-end; }
-  #loadmsg { color: var(--warn); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
-  #folder { flex: 1 1 auto; min-width: 8rem; max-width: 34rem; }
+  .tb-lead > b { color: var(--label-2); white-space: nowrap; }
+  .tb-trail { justify-content: flex-end; flex: 0 1 auto; }
+  #loadmsg, #cmsg { color: var(--warn); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
+  #folder, #cfolder { flex: 1 1 auto; min-width: 8rem; max-width: 34rem; }
+  .tools { position: static; min-height: 44px; padding: 6px 16px; }
+  #autoopts { display: flex; align-items: center; gap: 16px; }
+  .tools .row { display: flex; align-items: center; gap: 8px; margin: 0; }
+  .tools .row > span { display: inline; white-space: nowrap; }
+  .tools .row input[type=range] { width: 140px; }
+  #reset { margin-left: auto; }
+  #gear { display: inline-flex; align-items: center; justify-content: center; padding: 3px 6px; }
+  #gear[aria-expanded=true] { background: var(--line); }
 
   button, select, input[type=text], input[type=number] { font: inherit; color: var(--label); min-height: 28px; border-radius: 6px;
         border: 1px solid var(--line); background: var(--surface-2); padding: 3px 10px; }
@@ -45,28 +54,37 @@
   .seg input:checked + span { background: var(--accent); color: #fff; font-weight: 600; }
   .seg input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 1px; }
 
-  /* Mise en page : vues à gauche, inspecteur à droite */
+  /* Mise en page : vues à gauche, inspecteur à droite (masquable par la roue crantée) */
   :root { --insp: clamp(400px, 34vw, 560px); }   /* largeur du panneau de droite (réglable en glissant son bord) */
-  .app { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) var(--insp); height: calc(100% - 52px); }
+  .app { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) var(--insp); flex: 1 1 auto; min-height: 0; }
+  .app.noinsp { grid-template-columns: minmax(0, 1fr); }
+  .app.noinsp .inspector, .app.noinsp #grip { display: none; }
   #grip { position: absolute; top: 0; bottom: 0; right: calc(var(--insp) - 3px); width: 7px; cursor: col-resize; z-index: 4; touch-action: none; }
   #grip:hover, #grip:active { background: var(--accent); opacity: .6; }
-  main { overflow: auto; padding: 16px; }
+  main { overflow-x: auto; overflow-y: scroll; padding: 16px; --vh: 300px; }   /* --vh : calculée par layout() pour remplir la largeur */
   .inspector { overflow: auto; border-left: 1px solid var(--line); background: var(--surface); padding: 4px 16px 24px; }
 
-  /* Vues : même hauteur affichée (--vh), largeur selon le rapport d'aspect physique de chaque image */
-  main { --vh: min(calc(100vh - 150px), calc((100vw - var(--insp) - 32px - 36px) / 3.1)); }
-  .views, .miprow { display: flex; gap: 12px; align-items: flex-start; }
-  .miprow { margin-top: 20px; }            /* MIP rotatif sur sa propre ligne */
+  /* Vues : une ligne par séance (A, B, mix), colonnes axial / coronal / sagittal, même hauteur affichée (--vh) */
+  #views { display: grid; grid-template-columns: 28px repeat(3, max-content); gap: 12px; align-items: end; }
+  .vrow { display: contents; }
+  .zcol { align-self: end; }
+  .zcol input[type=range] { writing-mode: vertical-lr; direction: rtl; width: 28px; height: var(--vh); }
+  .miprow { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-top: 20px; }   /* MIP sur sa propre ligne */
   .miptools { display: flex; flex-direction: column; gap: 8px; max-width: 220px; align-self: center; }
   .hint { color: var(--label-3); font-size: 12px; margin: 0; }
   figure { position: relative; margin: 0; flex: 0 0 auto; }
   figcaption { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 1px 8px; border-radius: 6px; font-size: 12px; color: var(--label-2);
-               background: rgba(28,28,30,.72); backdrop-filter: blur(8px); text-transform: capitalize; }
+               background: rgba(28,28,30,.72); backdrop-filter: blur(8px); text-transform: capitalize; pointer-events: none; }
+  figure.mix figcaption { top: 30px; }
   figcaption b { color: var(--label); font-variant-numeric: tabular-nums; }
   .wrap { position: relative; line-height: 0; width: fit-content; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
   .wrap img { display: block; height: var(--vh); width: auto; background: #000; cursor: crosshair; }
   .wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   figure > input[type=range] { margin-top: 8px; }
+  /* poignée de la barre de séparation A | B (ligne mix) */
+  .splitbar { position: relative; height: 18px; margin: 0 1px 4px; cursor: ew-resize; touch-action: none; }
+  .splitbar::before { content: ""; position: absolute; left: 0; right: 0; top: 8px; height: 2px; background: var(--line); border-radius: 1px; }
+  .knob { position: absolute; top: 1px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; background: #fff; border: 2px solid var(--accent); }
 
   /* Curseurs : natifs (accessibles au clavier), 28 px de zone utile */
   input[type=range] { display: block; width: 100%; height: 28px; margin: 0; }
@@ -91,10 +109,9 @@
   table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
   td, th { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); }
   th { color: var(--label-2); }
-  td:first-child, th:first-child { text-align: left; }
-  #cmpseg span { min-width: 58px; padding: 0 6px; }
+  td:first-child, th:first-child, td.loc, th.loc { text-align: left; }
   details.subsec { margin-top: 8px; } details.subsec > summary { cursor: pointer; min-height: 28px; display: flex; align-items: center; color: var(--label-2); }
-  td.up { color: #ff6961; } td.down { color: #64b5ff; }   /* évolution d'une lésion : hausse / baisse */
+  td.up { color: #ff6961; } td.down { color: #64b5ff; }   /* évolution d'un point de fixation : hausse / baisse */
   th[data-k] { cursor: pointer; user-select: none; white-space: nowrap; } th[data-k]:hover { color: var(--label); }
   tr.les { cursor: pointer; }
   tr.les:hover td, tr.les:focus-visible td { background: var(--surface-2); }
@@ -107,34 +124,60 @@
            border: 2px solid #fff; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.6); }
 
   @media (prefers-contrast: more) { :root { --line: #8e8e93; --label-2: #d1d1d6; --label-3: #c7c7cc; } }
-  @media (max-width: 1000px) { .app { grid-template-columns: 1fr; height: auto; } .inspector { border-left: 0; } main { --vh: 60vh; } }
+  @media (max-width: 1000px) { .app, .app.noinsp { grid-template-columns: 1fr; } .inspector { border-left: 0; } #grip { display: none; } }
 </style>
 
 <header class="toolbar">
   <div class="tb-lead">
-    <input id="folder" type="text" list="recent" placeholder="Dossier DICOM (TEP + CT)" aria-label="Dossier DICOM">
+    <b>Séance A</b>
+    <input id="folder" type="text" list="recent" placeholder="Dossier DICOM (TEP + CT)" aria-label="Dossier DICOM de la séance A">
     <datalist id="recent"></datalist>
     <button id="open">Ouvrir</button>
     <button id="browse" hidden>Parcourir…</button>
   </div>
+  <div class="tb-lead">
+    <b>Séance B</b>
+    <input id="cfolder" type="text" list="recent" placeholder="Dossier DICOM de la séance B (autre date, même patient)" aria-label="Dossier de la séance B">
+    <button id="cload">Comparer</button>
+    <button id="cbrowse" hidden>Parcourir…</button>
+    <span id="cmsg" role="status"></span>
+  </div>
+  <div class="tb-trail">
+    <span id="loadmsg" role="status"></span>
+    <button id="pdf" class="primary">Exporter PDF</button>
+    <button id="gear" aria-label="Réglages" title="Afficher / masquer le panneau de réglages" aria-controls="inspector" aria-expanded="true">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<nav class="toolbar tools" aria-label="Outils">
   <div class="seg" role="radiogroup" aria-label="Outil">
     <label title="Un clic positionne les autres coupes"><input type="radio" name="tool" value="nav" checked><span>Naviguer</span></label>
     <label title="Un clic, le trait suit la souris, un 2e clic le fige (Échap annule)"><input type="radio" name="tool" value="ruler"><span>Règle</span></label>
     <label title="Un clic sur une structure : plus grande dimension et dimension perpendiculaire"><input type="radio" name="tool" value="auto"><span>Mesure auto</span></label>
   </div>
-  <div class="tb-trail">
-    <span id="loadmsg" role="status"></span>
-    <button id="pdf" class="primary">Exporter PDF</button>
+  <div id="autoopts" hidden>
+    <label class="row" id="srcbox"><span>Mesure sur</span>
+      <select id="src"><option value="pet">TEP</option><option value="ct">CT</option></select></label>
+    <label class="row" id="pctbox" title="Molette pour ajuster"><span>Région <b id="pctv">50</b> % du max local</span>
+      <input id="pct" type="range" min="1" max="100" step="1" value="50"></label>
+    <label class="row" id="tolbox" title="Molette pour ajuster" hidden><span>Tolérance ± <b id="tolv">50</b> HU</span>
+      <input id="tol" type="range" min="5" max="300" step="5" value="50"></label>
   </div>
-</header>
+  <button id="reset">Réinitialiser le zoom</button>
+</nav>
 
-<div class="app">
+<div class="app" id="app">
   <main>
-    <div class="views" id="views"></div>
+    <div id="views"></div>
     <section class="miprow" id="miprow" aria-label="MIP rotatif"></section>
   </main>
 
-  <aside class="inspector" aria-label="Réglages et résultats">
+  <aside class="inspector" id="inspector" aria-label="Réglages et résultats">
     <details class="sec" open>
       <summary>Affichage</summary>
       <div id="fz">
@@ -153,24 +196,16 @@
       <label class="row"><span>Fenêtre SUV max <b id="vmaxv">10</b></span>
         <input id="vmax" type="range" min="1" max="30" step="0.5" value="10"></label>
       <div class="cbar"><img id="bar" alt="Échelle de couleur SUV"><div><span id="barmin">SUV 0</span><span id="barmax">10</span></div></div>
+      <label class="row cmponly" id="mixbox" hidden><span>Ligne du bas</span>
+        <select id="mixmode"><option value="swipe">Mix A | B</option><option value="diff">Différence A − B</option></select></label>
+      <p class="hint" id="diffhint" hidden></p>
       <span id="glob"></span>
     </details>
 
     <details class="sec" id="cmpsec" open>
       <summary>Comparaison de séances</summary>
-      <label class="row"><span>Séance B (autre date, même patient)</span>
-        <input id="cfolder" type="text" list="recent" placeholder="Dossier DICOM de la séance B" aria-label="Dossier de la séance B"></label>
-      <div class="btns"><button id="cbrowse" hidden>Parcourir…</button><button id="cload">Comparer</button></div>
-      <div id="cmsg" class="hint" role="status"></div>
+      <p class="hint" id="cmphint">Indiquez le dossier de la séance B en haut de page, puis « Comparer ».</p>
       <div id="cmpui" hidden>
-        <div class="seg" id="cmpseg" role="radiogroup" aria-label="Séance affichée">
-          <label title="Séance actuelle"><input type="radio" name="cmp" value="a" checked><span>A</span></label>
-          <label title="Séance B, recalée sur A"><input type="radio" name="cmp" value="b"><span>B</span></label>
-          <label title="A à gauche du curseur, B à droite"><input type="radio" name="cmp" value="swipe"><span>A | B</span></label>
-          <label title="SUV de A moins SUV de B : rouge = hausse, bleu = baisse"><input type="radio" name="cmp" value="diff"><span>A − B</span></label>
-        </div>
-        <label class="row" id="splitbox" hidden><span>Position du curseur <span><b id="splitv">50</b> %</span></span>
-          <input id="split" type="range" min="0" max="100" step="1" value="50"></label>
         <div id="cinfo" class="hint"></div>
         <details id="offsec" class="subsec">
           <summary>Alignement fin : décaler chaque séance</summary>
@@ -180,7 +215,7 @@
           </div>
           <div id="aamsg" class="hint" role="status"></div>
           <div id="offs"></div>
-          <p class="hint">Chaque séance se décale séparément, en voxels (1 voxel ≈ 1,6 mm en x et y, 2,1 mm en z). Le tableau des lésions,
+          <p class="hint">Chaque séance se décale séparément, en voxels (1 voxel ≈ 1,6 mm en x et y, 2,1 mm en z). Le tableau des points de fixation,
             les mesures et le PDF en tiennent compte. Les curseurs se règlent à la molette (Maj = ×10).</p>
         </details>
       </div>
@@ -188,13 +223,7 @@
 
     <details class="sec" open>
       <summary>Mesures</summary>
-      <label class="row" id="srcbox"><span>Mesure auto sur</span>
-        <select id="src"><option value="pet">TEP</option><option value="ct">CT</option></select></label>
-      <label class="row" id="pctbox" title="Molette pour ajuster"><span>Région <span><b id="pctv">50</b> % du max local</span></span>
-        <input id="pct" type="range" min="1" max="100" step="1" value="50"></label>
-      <label class="row" id="tolbox" title="Molette pour ajuster" hidden><span>Tolérance <span>± <b id="tolv">50</b> HU</span></span>
-        <input id="tol" type="range" min="5" max="300" step="5" value="50"></label>
-      <div class="btns"><button id="reset">Réinitialiser le zoom</button><button id="clear">Effacer les mesures</button></div>
+      <div class="btns"><button id="clear">Effacer les mesures</button></div>
       <div id="res"></div>
     </details>
 
@@ -214,14 +243,16 @@
     </details>
 
     <details class="sec">
-      <summary>Lésions</summary>
-      <label class="row"><span>Seuil de détection (SUV)</span>
+      <summary>Points de fixation</summary>
+      <label class="row"><span>Seuil des points de fixation (SUV)</span>
         <input id="thr" type="number" value="2.5" step="0.1" min="0"></label>
       <table id="tbl"></table>
     </details>
 
-    <p class="note">Recherche uniquement, pas un dispositif médical. Molette sur une image : zoom centré sur la souris ;
-      molette sur un curseur : ajuste sa valeur (Maj = ×10). Une loupe ×4 suit la souris avec la règle et la mesure auto.</p>
+    <p class="note">Recherche uniquement, pas un dispositif médical. Molette sur une image : coupe suivante / précédente (Maj = ×10 ;
+      sur le MIP : angle ±10°) ; Ctrl + molette : zoom centré sur la souris. Le curseur vertical à gauche de chaque ligne zoome les trois vues
+      autour du point courant. Molette sur un curseur : ajuste sa valeur (Maj = ×10). Une loupe ×4 suit la souris avec la règle et la mesure auto.
+      Un clic sur un point de fixation du tableau y amène les trois coupes.</p>
   </aside>
   <div id="grip" role="separator" aria-orientation="vertical" title="Glisser pour élargir ou réduire le panneau"></div>
 </div>
@@ -233,9 +264,17 @@
 const $ = id => document.getElementById(id);
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const views = [["axial", 0], ["coronal", 1], ["sagittal", 2], ["mip", null]];
+const SLICES = ["axial", "coronal", "sagittal"];
 const ROWCOL = { axial: [1, 2], coronal: [0, 2], sagittal: [0, 1], mip: [0, 2] };  // axes (ligne, colonne) de [z, y, x]
-const sliders = {}, zoom = {};
-let cmpMode = "a", mipsReady = false;  // séance affichée : a | b | swipe | diff
+const sliders = {}, zoom = {};  // un curseur et un zoom par vue, partagés par toutes les lignes (A, B, mix)
+// cmpMode : séance de la dernière ligne cliquée (a | b | swipe | diff), reprise par le PDF
+let cmpMode = "a", mipsReady = false, cmpReady = false, split = 0.5;  // split : position de la séparation A | B (0..1)
+// Lignes : « a » (séance A), « b » (séance B recalée), « m » (mix A | B ou différence A − B) ; id d'image : vue, vue-b, vue-m
+const ROWS = ["a", "b", "m"];
+const key = (v, r) => r === "a" ? v : `${v}-${r}`;
+const rows = () => cmpReady ? ROWS : ["a"];
+const mixMode = () => $("mixmode").value;
+const rowCmp = r => r === "a" ? "a" : r === "b" ? "b" : mixMode();
 // Décalage manuel de chaque séance (voxels, [z, y, x]) : valeur affichée = déplacement visuel de l'image vers les indices croissants
 // (+z vers la tête, +y vers l'arrière, +x vers la gauche du patient). Le serveur reçoit l'opposé : out[i] = vol[i + d].
 const off = { A: [0, 0, 0], B: [0, 0, 0] };
@@ -243,9 +282,10 @@ const offParam = s => off[s].map(v => -v).join(",");
 let rev = 0;  // révision des données : change l'URL des images quand le CT change (même URL = le navigateur ne recharge pas)
 const ms = [];  // mesures : {v, i, kind: "ruler"|"auto", source, items, text, X, Y (auto : point cliqué, fractions de l'image entière)}
 let shape, spacing, pending = null;  // pending : 1er point de la règle {v, i, a, cur}
-let lastMove = null;                 // dernière position souris {v, x, y} pour la loupe
+let lastMove = null;                 // dernière position souris {v, r, x, y} pour la loupe
 
 const cur = v => sliders[v] ? +sliders[v].value : 0;
+const curFor = (v, r) => v === "mip" && r !== "a" ? 0 : cur(v);  // MIP de B et du mix : toujours de face
 const tool = () => document.querySelector("input[name=tool]:checked").value;
 const mmSize = v => { const [r, c] = ROWCOL[v]; return [shape[c] * spacing[c], shape[r] * spacing[r]]; };  // [largeur, hauteur] mm
 const mmDist = (v, a, b) => { const [W, H] = mmSize(v); return Math.hypot((b[0] - a[0]) * W, (b[1] - a[1]) * H); };
@@ -254,6 +294,7 @@ const toFull = (v, fx, fy) => [zoom[v].x0 + fx / zoom[v].z, zoom[v].y0 + fy / zo
 const toView = (v, X, Y) => [(X - zoom[v].x0) * zoom[v].z, (Y - zoom[v].y0) * zoom[v].z];
 const showRes = extra => $("res").textContent = [...ms.map(m => m.text), extra].filter(Boolean).join("\n");
 const drawAll = () => views.forEach(([v]) => draw(v));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 // Clic (X, Y fractions de l'image entière) -> positionne les coupes des autres vues.
 // Coronal/sagittal/MIP ont la tête en haut : z = 1 - Y.
@@ -266,51 +307,77 @@ function pick(view, X, Y) {
   refresh();
 }
 
-function imgUrl(v, i = cur(v)) {
-  const z = zoom[v];
-  return `/img?view=${v}&i=${i}&vmax=${$("vmax").value}&cmap=${$("cmap").value}` +
-    `&mode=${$("mode").value}&alpha=${$("alpha").value}&z=${z.z}&x0=${z.x0}&y0=${z.y0}&organs=${$("orgs").checked ? 1 : 0}&r=${rev}&cmp=${cmpMode}&split=${$("split").value / 100}&oa=${offParam("A")}&ob=${offParam("B")}`;
+// Point du curseur croisé (coupes courantes) sur une vue, en fractions de l'image entière.
+function crossCenter(v) {
+  const [nz, ny, nx] = shape, z = cur("axial"), y = cur("coronal"), x = cur("sagittal");
+  if (v === "axial") return [(x + .5) / nx, (y + .5) / ny];
+  if (v === "sagittal") return [(y + .5) / ny, 1 - (z + .5) / nz];
+  return [(x + .5) / nx, 1 - (z + .5) / nz];  // coronal ou mip
+}
+const centered = (v, z) => { const [cx, cy] = crossCenter(v), w = 1 / z; return { z, x0: clamp(cx - w / 2, 0, 1 - w), y0: clamp(cy - w / 2, 0, 1 - w) }; };
+// Curseurs verticaux de zoom (un par ligne, synchronisés) : reflètent le dernier zoom appliqué
+const syncZoom = z => document.querySelectorAll(".zoomr").forEach(s => s.value = z);
+function setZoom(z) {
+  for (const v of SLICES) zoom[v] = centered(v, z);
+  syncZoom(z);
+  SLICES.forEach(refreshView);
 }
 
-// Une seule requête d'image en vol par vue, la dernière demande gagne : en faisant glisser un curseur, le serveur
+function imgUrl(v, r = "a", i = curFor(v, r)) {
+  const z = zoom[v];
+  return `/img?view=${v}&i=${i}&vmax=${$("vmax").value}&cmap=${$("cmap").value}` +
+    `&mode=${$("mode").value}&alpha=${$("alpha").value}&z=${z.z}&x0=${z.x0}&y0=${z.y0}&organs=${$("orgs").checked ? 1 : 0}&r=${rev}&cmp=${rowCmp(r)}&split=${split}&oa=${offParam("A")}&ob=${offParam("B")}`;
+}
+
+// Une seule requête d'image en vol par image, la dernière demande gagne : en faisant glisser un curseur, le serveur
 // ne calcule pas toutes les coupes intermédiaires (elles seraient abandonnées de toute façon).
 const imgBusy = {}, dirty = {}, busyT = {}, pfT = {};
-function settled(v) {
-  clearTimeout(busyT[v]); imgBusy[v] = false;
-  if (dirty[v]) { dirty[v] = false; refreshView(v); }
+function settled(v, r) {
+  const k = key(v, r);
+  clearTimeout(busyT[k]); imgBusy[k] = false;
+  if (dirty[k]) { dirty[k] = false; loadImg(v, r); }
+}
+function loadImg(v, r) {
+  const k = key(v, r);
+  if (imgBusy[k]) { dirty[k] = true; return; }
+  imgBusy[k] = true;
+  busyT[k] = setTimeout(() => settled(v, r), 8000);  // garde-fou si aucun événement load/error n'arrive
+  $("img-" + k).src = imgUrl(v, r);
 }
 function refreshView(v) {
-  if (sliders[v]) $("n-" + v).textContent = v === "mip" ? `${cur(v)}°` : `${cur(v) + 1} / ${+sliders[v].max + 1}`;
-  if (imgBusy[v]) { dirty[v] = true; return; }
-  imgBusy[v] = true;
-  busyT[v] = setTimeout(() => settled(v), 8000);  // garde-fou si aucun événement load/error n'arrive
-  $("img-" + v).src = imgUrl(v);
+  if (sliders[v]) {
+    const t = v === "mip" ? `${cur(v)}°` : `${cur(v) + 1} / ${+sliders[v].max + 1}`;
+    document.querySelectorAll(`[data-n="${v}"]`).forEach(e => e.textContent = t);
+  }
+  for (const r of rows()) loadImg(v, r);
 }
 
 // Préchargement : une fois la coupe affichée et la souris au repos, le serveur prépare les coupes voisines (il les met en cache).
-function prefetch(v) {
-  clearTimeout(pfT[v]);
+function prefetch(v, r) {
+  const k = key(v, r);
+  clearTimeout(pfT[k]);
   if (v === "mip" || !sliders[v]) return;
-  pfT[v] = setTimeout(() => {
+  pfT[k] = setTimeout(() => {
     for (const d of [1, -1]) {
       const i = cur(v) + d;
-      if (i >= 0 && i <= +sliders[v].max) fetch(imgUrl(v, i), { priority: "low" }).then(r => r.arrayBuffer()).catch(() => {});
+      if (i >= 0 && i <= +sliders[v].max) fetch(imgUrl(v, r, i), { priority: "low" }).then(r => r.arrayBuffer()).catch(() => {});
     }
   }, 250);
 }
 
 function refresh() {
-  const diff = cmpMode === "diff" && !$("cmpui").hidden, v = +$("vmax").value;  // différence A − B : échelle divergente ±vmax/2
+  const v = +$("vmax").value;
   $("vmaxv").textContent = $("vmax").value;
-  $("barmax").textContent = diff ? "+" + v / 2 + " (hausse)" : v;
-  $("barmin").textContent = diff ? "−" + v / 2 + " (baisse)" : "SUV 0";
-  $("bar").src = "/bar?cmap=" + (diff ? "bwr" : $("cmap").value);
+  $("barmax").textContent = v;
+  $("bar").src = "/bar?cmap=" + $("cmap").value;
+  $("diffhint").textContent = `Différence A − B : rouge = hausse, bleu = baisse, échelle ±${v / 2} SUV.`;
   for (const [v] of views) refreshView(v);
 }
 
-// --- surcouche de mesures (chacune n'est visible que sur la coupe où elle a été faite) ---
-function draw(v) {
-  const img = $("img-" + v), c = $("cv-" + v);
+// --- surcouche de mesures (chacune n'est visible que sur la coupe où elle a été faite, sur toutes les lignes) ---
+function draw(v) { for (const r of rows()) drawCell(v, r); }
+function drawCell(v, r) {
+  const k = key(v, r), img = $("img-" + k), c = $("cv-" + k), i = curFor(v, r);
   if (!img || !c) return;
   c.width = img.clientWidth; c.height = img.clientHeight;
   const g = c.getContext("2d"), P = ([X, Y]) => { const [a, b] = toView(v, X, Y); return [a * c.width, b * c.height]; };
@@ -331,24 +398,24 @@ function draw(v) {
     g.stroke();
   };
   const items = [];
-  if (pending && pending.v === v && pending.i === cur(v)) {
-    items.push({ t: "dot", p: pending.a, color: "#0f0" });
-    if (pending.cur) items.push({ t: "line", a: pending.a, b: pending.cur, color: "#0f0", bars: true, text: mmDist(v, pending.a, pending.cur).toFixed(1) + " mm" });
-  }
-  for (const m of ms) if (m.v === v && m.i === cur(v)) items.push(...m.items);  // pour le MIP, « i » est l'angle
+  if (pending && pending.v === v && pending.i === i && pending.cur)
+    items.push({ t: "line", a: pending.a, b: pending.cur, color: "#0f0", bars: true, text: mmDist(v, pending.a, pending.cur).toFixed(1) + " mm" });
+  for (const m of ms) if (m.v === v && m.i === i) items.push(...m.items);  // pour le MIP, « i » est l'angle
   for (const it of items) {
     if (it.t === "dots") { g.fillStyle = it.color; for (const p of it.pts) { const [x, y] = P(p); g.fillRect(x - 1, y - 1, 2, 2); } }
     else if (it.t === "dot") dot(it.p, it.color);
     else {
+      g.globalAlpha = it.bars ? .6 : 1;  // règle : un peu transparente, sans pastilles aux extrémités
       g.strokeStyle = it.color; g.beginPath(); g.moveTo(...P(it.a)); g.lineTo(...P(it.b)); g.stroke();
       if (it.bars) bars(it.a, it.b, it.color);
-      dot(it.a, it.color); dot(it.b, it.color);
+      else { dot(it.a, it.color); dot(it.b, it.color); }
+      g.globalAlpha = 1;
       label(it.b, it.a, it.text, it.color);
     }
   }
-  drawMarker(v, g, P);
-  if (cmpMode === "swipe") {  // trait de séparation A | B (il suit le curseur de position)
-    const x = $("split").value / 100 * c.width;
+  drawMarker(v, r, g, P);
+  if (r === "m" && mixMode() === "swipe") {  // trait de séparation A | B (il suit la poignée)
+    const x = split * c.width;
     g.strokeStyle = "#fff"; g.lineWidth = 2; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, c.height); g.stroke();
     g.font = "bold 12px system-ui"; g.fillStyle = "#fff";
     g.fillText("A", Math.max(4, x - 16), c.height - 8); g.fillText("B", Math.min(c.width - 14, x + 8), c.height - 8);
@@ -358,7 +425,7 @@ function draw(v) {
 // --- loupe ×4 : zone sous le curseur agrandie, viseur à centre vide ---
 function updateLoupe() {
   const L = $("loupe"), m = lastMove;
-  const img = m && $("img-" + m.v), c = m && $("cv-" + m.v);
+  const img = m && $("img-" + key(m.v, m.r)), c = m && $("cv-" + key(m.v, m.r));
   if (!m || !img || tool() === "nav" || !img.naturalWidth || !c.width) { L.hidden = true; return; }
   const r = img.getBoundingClientRect(), S = 160, Z = 4, w = S / Z, k = img.naturalWidth / r.width;
   const cx = m.x - r.left, cy = m.y - r.top, g = L.getContext("2d");
@@ -404,27 +471,28 @@ async function remeasure() {
   busy = false;
 }
 
-async function onClick(v, fx, fy) {
-  const [X, Y] = toFull(v, fx, fy), t = tool();
+async function onClick(v, r, fx, fy) {
+  const [X, Y] = toFull(v, fx, fy), t = tool(), i = curFor(v, r);
+  cmpMode = rowCmp(r);
   if (t === "nav") return pick(v, X, Y);
   if (t === "ruler") {
-    if (!pending || pending.v !== v || pending.i !== cur(v)) { pending = { v, i: cur(v), a: [X, Y], cur: [X, Y] }; showRes("Règle : cliquez le 2e point"); return draw(v); }
+    if (!pending || pending.v !== v || pending.i !== i) { pending = { v, i, a: [X, Y], cur: [X, Y] }; showRes("Règle : cliquez le 2e point"); return draw(v); }
     const d = mmDist(v, pending.a, [X, Y]);
-    ms.push({ v, i: cur(v), kind: "ruler", text: `Règle ${v} ${cur(v) + 1} : ${d.toFixed(1)} mm`,
+    ms.push({ v, i, kind: "ruler", text: `Règle ${v} ${i + 1} : ${d.toFixed(1)} mm`,
               items: [{ t: "line", a: pending.a, b: [X, Y], color: "#0f0", bars: true, text: d.toFixed(1) + " mm" }] });
     pending = null;
     showRes();
     return draw(v);
   }
-  // en mode curseur A | B, on mesure la séance qui est sous le point cliqué ; en différence, la séance A
-  const cmp = cmpMode === "b" ? "b" : cmpMode === "swipe" ? (fx >= $("split").value / 100 ? "b" : "a") : "a";
-  const m = { v, i: cur(v), kind: "auto", source: v === "mip" ? "pet" : $("src").value, cmp, X, Y, items: [], text: "" };
+  // ligne B : séance B ; ligne mix A | B : la séance qui est sous le point cliqué ; en différence, la séance A
+  const cmp = r === "b" ? "b" : r === "m" && mixMode() === "swipe" && fx >= split ? "b" : "a";
+  const m = { v, i, kind: "auto", source: v === "mip" ? "pet" : $("src").value, cmp, X, Y, items: [], text: "" };
   await fetchAuto(m);
   ms.push(m);
   showRes(); draw(v);
 }
 
-// Liste des lésions : un clic sur une ligne (ou Entrée) amène les 3 coupes sur le pic de la lésion et pose un repère.
+// Points de fixation : un clic sur une ligne (ou Entrée) amène les 3 coupes sur le pic et pose un repère.
 let lesionList = [], marker = null;  // marker = {z, y, x} (indices de voxel)
 let lesTok = 0, lesTimer = 0;
 async function lesions() {
@@ -440,12 +508,13 @@ async function lesions() {
   renderLesions();
 }
 
-// Tri par colonne : clic sur l'en-tête (ou Entrée) ; un 2e clic inverse. Les valeurs manquantes (Δ % sans B) restent toujours en bas.
+// Tri par colonne : clic sur l'en-tête (ou Entrée) ; un 2e clic inverse. Les valeurs manquantes (Δ % sans B, localisation) restent toujours en bas.
 const LES_COLS = [["n", "#"], ["suv_max", "SUVmax"], ["suv_mean", "SUVmean"], ["mtv_ml", "MTV ml"], ["tlg", "TLG"],
-                  ["suv_b", "SUVmax B"], ["delta_pct", "Δ %"]];
+                  ["suv_b", "SUVmax B"], ["delta_pct", "Δ %"], ["organe", "Localisation"]];
 let lesSort = { key: "n", dir: 1 };  // dir : 1 croissant, -1 décroissant ; le tri est conservé quand le seuil ou les décalages changent
 function sortBy(k) {
-  lesSort = lesSort.key === k ? { key: k, dir: -lesSort.dir } : { key: k, dir: k === "n" ? 1 : -1 };  // 1er clic : le plus grand d'abord (sauf #)
+  // 1er clic : le plus grand d'abord (sauf # et la localisation, par ordre alphabétique)
+  lesSort = lesSort.key === k ? { key: k, dir: -lesSort.dir } : { key: k, dir: k === "n" || k === "organe" ? 1 : -1 };
   renderLesions();
 }
 function renderLesions() {
@@ -454,19 +523,21 @@ function renderLesions() {
   if (!cols.some(([k]) => k === lesSort.key)) lesSort = { key: "n", dir: 1 };  // colonne B disparue : tri par défaut
   const { key, dir } = lesSort;
   const rows = [...lesionList].sort((a, b) => {
-    const x = a[key], y = b[key];
-    if (x == null || y == null) return (x == null) - (y == null);
-    return (x - y) * dir || a.n - b.n;
+    const x = a[key], y = b[key], nx = x == null || x === "", ny = y == null || y === "";
+    if (nx || ny) return nx - ny || a.n - b.n;
+    return (typeof x === "string" ? x.localeCompare(y, "fr") : x - y) * dir || a.n - b.n;
   });
   const evo = l => {  // variation de SUVmax de B vers A, en rouge si hausse > 25 %, en bleu si baisse > 25 %
     if (l.delta_pct == null) return `<td>—</td>`;
     return `<td class="${l.delta_pct > 25 ? "up" : l.delta_pct < -25 ? "down" : ""}">${l.delta_pct > 0 ? "+" : ""}${l.delta_pct.toFixed(0)}</td>`;
   };
-  $("tbl").innerHTML = "<tr>" + cols.map(([k, t]) => `<th data-k="${k}" tabindex="0" role="button" title="Trier par cette colonne" ` +
+  // localisation : vide tant que les organes ne sont pas calculés (champ absent), « — » si aucun organe proche
+  const loc = l => `<td class="loc">${l.organe === undefined ? "" : l.organe == null ? "—" : esc(l.organe)}</td>`;
+  $("tbl").innerHTML = "<tr>" + cols.map(([k, t]) => `<th data-k="${k}"${k === "organe" ? ' class="loc"' : ""} tabindex="0" role="button" title="Trier par cette colonne" ` +
       `aria-sort="${k === key ? (dir > 0 ? "ascending" : "descending") : "none"}">${t}${k === key ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") + "</tr>" +
-    rows.map((l, i) => `<tr class="les" data-i="${i}" tabindex="0" title="Aller à cette lésion"><td>${l.n}</td><td>${l.suv_max.toFixed(2)}</td>` +
+    rows.map((l, i) => `<tr class="les" data-i="${i}" tabindex="0" title="Aller à ce point de fixation"><td>${l.n}</td><td>${l.suv_max.toFixed(2)}</td>` +
       `<td>${l.suv_mean.toFixed(2)}</td><td>${l.mtv_ml.toFixed(1)}</td><td>${l.tlg.toFixed(1)}</td>` +
-      (cc ? `<td>${l.suv_b.toFixed(2)}</td>${evo(l)}` : "") + `</tr>`).join("");
+      (cc ? `<td>${l.suv_b.toFixed(2)}</td>${evo(l)}` : "") + loc(l) + `</tr>`).join("");
   for (const th of $("tbl").querySelectorAll("th[data-k]")) {
     th.onclick = () => sortBy(th.dataset.k);
     th.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); th.onclick(); } };
@@ -478,34 +549,28 @@ function renderLesions() {
 }
 
 function gotoLesion(l) {
-  const [nz, ny, nx] = shape;
   marker = { z: l.peak[0], y: l.peak[1], x: l.peak[2] };  // indices de la séance A ; affichés décalés de off.A
   const [z, y, x] = l.peak.map((p, k) => clamp(p + off.A[k], 0, shape[k] - 1));
   sliders.axial.value = z; sliders.coronal.value = y; sliders.sagittal.value = x;
   if (sliders.mip) sliders.mip.value = 0;  // le repère n'a de sens que sur le MIP de face
-  // vues zoomées : on recentre sur la lésion pour qu'elle reste visible
-  const at = { axial: [(x + .5) / nx, (y + .5) / ny], coronal: [(x + .5) / nx, 1 - (z + .5) / nz],
-               sagittal: [(y + .5) / ny, 1 - (z + .5) / nz], mip: [(x + .5) / nx, 1 - (z + .5) / nz] };
-  for (const [v] of views) {
-    const s = zoom[v], w = 1 / s.z;
-    if (s.z > 1) zoom[v] = { z: s.z, x0: clamp(at[v][0] - w / 2, 0, 1 - w), y0: clamp(at[v][1] - w / 2, 0, 1 - w) };
-  }
+  // vues zoomées : on recentre sur le point pour qu'il reste visible
+  for (const [v] of views) if (zoom[v].z > 1) zoom[v] = centered(v, zoom[v].z);
   refresh();
 }
 
 // Position du repère (fractions de l'image entière) sur une vue, ou null s'il est hors de la coupe affichée.
-function markerPos(v) {
+function markerPos(v, r) {
   if (!marker) return null;
   const [nz, ny, nx] = shape, z = marker.z + off.A[0], y = marker.y + off.A[1], x = marker.x + off.A[2];
   if (v === "axial") return Math.abs(cur(v) - z) <= 1 ? [(x + .5) / nx, (y + .5) / ny] : null;
   if (v === "coronal") return Math.abs(cur(v) - y) <= 1 ? [(x + .5) / nx, 1 - (z + .5) / nz] : null;
   if (v === "sagittal") return Math.abs(cur(v) - x) <= 1 ? [(y + .5) / ny, 1 - (z + .5) / nz] : null;
-  return !sliders.mip || cur("mip") === 0 ? [(x + .5) / nx, 1 - (z + .5) / nz] : null;
+  return !sliders.mip || curFor(v, r) === 0 ? [(x + .5) / nx, 1 - (z + .5) / nz] : null;
 }
 
 // Repère de localisation : anneau à centre vide et 4 branches, deux traits (noir puis couleur) pour rester visible sur tout fond.
-function drawMarker(v, g, P) {
-  const p = markerPos(v);
+function drawMarker(v, r, g, P) {
+  const p = markerPos(v, r);
   if (!p) return;
   const [x, y] = P(p);
   for (const [col, lw] of [["#000", 5], ["#ff375f", 2.5]]) {
@@ -558,17 +623,43 @@ async function loadPatient() {
   }));
 }
 
+// Hauteur commune des images (--vh) : les 3 vues d'une ligne (largeur = hauteur × rapport d'aspect physique) remplissent la largeur.
+function layout() {
+  const m = document.querySelector("main");
+  if (!shape) return;
+  const sum = SLICES.reduce((s, v) => { const [W, H] = mmSize(v); return s + W / H; }, 0);
+  const free = m.clientWidth - 32 - 28 - 3 * 12 - 3 * 2 - 2;  // padding, curseur de zoom, 3 écarts, bordures, marge d'arrondi
+  m.style.setProperty("--vh", Math.max(120, Math.floor(free / sum)) + "px");
+  drawAll();
+}
+
+const ROWNAME = { a: "A", b: "B", m: "Mix" };
+const SPLITBAR = `<div class="splitbar"><div class="knob" role="slider" tabindex="0" aria-label="Séparation A | B" ` +
+                 `aria-valuemin="0" aria-valuemax="100"></div></div>`;
+// Une image (vue v, ligne r) ; la ligne mix porte la poignée de séparation A | B au-dessus de l'image.
+const fig = (v, r) => `<figure class="${r === "m" ? "mix " : ""}${r === "a" ? "" : "cmponly"}"${r === "a" ? "" : " hidden"}>` +
+  (r === "m" ? SPLITBAR : "") +
+  `<figcaption><span${r === "m" ? ' data-rn="m"' : ""}>${ROWNAME[r]}</span> · ${v} ` +
+  (v === "mip" && r !== "a" ? "<b>de face</b>" : `<b data-n="${v}"${r === "a" ? ` id="n-${v}"` : ""}></b>`) + `</figcaption>` +
+  `<div class="wrap"><img id="img-${key(v, r)}" alt="${v} ${ROWNAME[r]}"><canvas id="cv-${key(v, r)}"></canvas></div>` +
+  (v === "mip" && r === "a" ? `<input type="range" id="s-mip" aria-label="Angle du MIP">` : "") + `</figure>`;
+
 async function build(info) {
   $("glob").textContent = "SUVmax global : " + info.suv_max.toFixed(2);
   shape = info.shape; spacing = info.spacing;
   ms.length = 0; pending = null; lastMove = null; marker = null; showRes(); zeroOffsets();
   if (playTimer) { clearInterval(playTimer); playTimer = 0; }
-  const fig = v => `<figure><figcaption>${v} <b id="n-${v}"></b></figcaption>` +
-    `<div class="wrap"><img id="img-${v}"><canvas id="cv-${v}"></canvas></div><input type="range" id="s-${v}"></figure>`;
-  $("views").innerHTML = ["axial", "coronal", "sagittal"].map(fig).join("");
-  $("miprow").innerHTML = fig("mip") + `<div class="miptools"><button id="play" disabled>Lecture</button>` +
-    `<p class="hint">Le curseur d'angle (ou sa molette, 10° par cran) fait tourner le MIP autour de l'axe vertical.</p></div>`;
+  // grille : une ligne par séance (curseur vertical de zoom + 3 vues), puis une seule série de curseurs de coupe par colonne
+  $("views").innerHTML = ROWS.map(r => `<div class="vrow${r === "a" ? "" : " cmponly"}"${r === "a" ? "" : " hidden"}>` +
+      `<div class="zcol"><input type="range" class="zoomr" id="zr-${r}" min="1" max="16" step="any" value="1" ` +
+      `aria-label="Zoom des vues (ligne ${ROWNAME[r]})" title="Zoom, centré sur le point courant (molette)"></div>` +
+      SLICES.map(v => fig(v, r)).join("") + `</div>`).join("") +
+    `<div class="vrow"><div></div>` + SLICES.map(v => `<input type="range" id="s-${v}" aria-label="Coupe ${v}">`).join("") + `</div>`;
+  $("miprow").innerHTML = ROWS.map(r => fig("mip", r)).join("") + `<div class="miptools"><button id="play" disabled>Lecture</button>` +
+    `<p class="hint">Le curseur d'angle (ou la molette sur le MIP, 10° par cran) fait tourner le MIP de A autour de l'axe vertical ; B et le mix restent de face.</p></div>`;
   $("play").onclick = togglePlay;
+  for (const z of document.querySelectorAll(".zoomr")) z.oninput = () => setZoom(+z.value);
+  setupSplit();
   // couches CT : « Aucun CT » puis une couche par série du dossier (textContent : jamais d'HTML venu du DICOM)
   curCt = info.ct_uid || "";
   const layers = [{ uid: "", label: "Aucun CT" }, ...(info.ct_series || []).map(c => ({ uid: c.uid,
@@ -588,38 +679,7 @@ async function build(info) {
   syncSrc();
   for (const [v, ax] of views) {
     zoom[v] = { z: 1, x0: 0, y0: 0 };
-    const img = $("img-" + v);
-    let raf = 0;
-    imgBusy[v] = dirty[v] = false;
-    img.onload = () => { draw(v); updateLoupe(); settled(v); prefetch(v); };
-    img.onerror = () => settled(v);
-    img.onclick = e => {
-      const r = img.getBoundingClientRect();
-      onClick(v, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
-    };
-    // trait de la règle et loupe suivent la souris (une image par frame)
-    img.onmousemove = e => {
-      lastMove = { v, x: e.clientX, y: e.clientY };
-      organTip(v, e.clientX, e.clientY);
-      if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        const r = img.getBoundingClientRect();
-        if (pending && pending.v === v && pending.i === cur(v) && lastMove)
-          pending.cur = toFull(v, (lastMove.x - r.left) / r.width, (lastMove.y - r.top) / r.height);
-        draw(v); updateLoupe();
-      });
-    };
-    img.onmouseleave = () => { lastMove = null; updateLoupe(); $("tip").hidden = true; };
-    // zoom centré sur la souris : le point sous le curseur reste fixe
-    img.addEventListener("wheel", e => {
-      e.preventDefault();
-      const r = img.getBoundingClientRect(), mx = (e.clientX - r.left) / r.width, my = (e.clientY - r.top) / r.height;
-      const s = zoom[v], [X, Y] = toFull(v, mx, my);
-      const z2 = clamp(s.z * (e.deltaY < 0 ? 1.25 : 0.8), 1, 16), w = 1 / z2;
-      zoom[v] = { z: z2, x0: clamp(X - mx * w, 0, 1 - w), y0: clamp(Y - my * w, 0, 1 - w) };
-      refreshView(v);
-    }, { passive: false });
+    for (const r of ROWS) setupImg(v, r);
     const s = sliders[v] = $("s-" + v);
     if (ax !== null) {
       s.max = info.shape[ax] - 1;
@@ -629,23 +689,109 @@ async function build(info) {
     }
     s.oninput = () => refreshView(v);
   }
+  // comparaison : on repart de la séance A seule ; si le serveur a déjà une séance B recalée, l'interface la reprend
+  cmpMode = "a"; setCmpReady(false);
+  layout();
   refresh();
   lesions();
   loadPatient();
   watchOrgans();
   watchMips();
-  // comparaison : on repart de la séance A seule ; si le serveur a déjà une séance B recalée, l'interface la reprend
-  cmpMode = "a"; $("cmpui").hidden = true; $("splitbox").hidden = true;
-  document.querySelector("input[name=cmp][value=a]").checked = true;
   $("cbrowse").hidden = !info.browse;
   $("cfolder").value = $("cfolder").value || (info.recent || []).find(f => f !== info.folder) || "";
   watchCompare();
 }
 
+// Événements d'une image (vue v, ligne r) : clic, survol (règle, loupe, organe), molette (coupes) et Ctrl + molette (zoom).
+function setupImg(v, r) {
+  const k = key(v, r), img = $("img-" + k);
+  let raf = 0;
+  imgBusy[k] = dirty[k] = false;
+  img.onload = () => { drawCell(v, r); updateLoupe(); settled(v, r); prefetch(v, r); };
+  img.onerror = () => settled(v, r);
+  img.onclick = e => {
+    const b = img.getBoundingClientRect();
+    onClick(v, r, (e.clientX - b.left) / b.width, (e.clientY - b.top) / b.height);
+  };
+  // trait de la règle et loupe suivent la souris (une image par frame)
+  img.onmousemove = e => {
+    lastMove = { v, r, x: e.clientX, y: e.clientY };
+    organTip(v, r, e.clientX, e.clientY);
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      const b = img.getBoundingClientRect();
+      if (pending && pending.v === v && pending.i === curFor(v, r) && lastMove)
+        pending.cur = toFull(v, (lastMove.x - b.left) / b.width, (lastMove.y - b.top) / b.height);
+      draw(v); updateLoupe();
+    });
+  };
+  img.onmouseleave = () => { lastMove = null; updateLoupe(); $("tip").hidden = true; };
+  img.addEventListener("wheel", e => {
+    const dy = e.deltaY || e.deltaX;  // Maj + molette : certains navigateurs passent en défilement horizontal
+    if (e.ctrlKey) {  // Ctrl + molette : zoom centré sur la souris, le point sous le curseur reste fixe
+      e.preventDefault();
+      const b = img.getBoundingClientRect(), mx = (e.clientX - b.left) / b.width, my = (e.clientY - b.top) / b.height;
+      const s = zoom[v], [X, Y] = toFull(v, mx, my);
+      const z2 = clamp(s.z * (dy < 0 ? 1.25 : 0.8), 1, 16), w = 1 / z2;
+      zoom[v] = { z: z2, x0: clamp(X - mx * w, 0, 1 - w), y0: clamp(Y - my * w, 0, 1 - w) };
+      if (v !== "mip") syncZoom(z2);
+      return refreshView(v);
+    }
+    // molette seule : coupe suivante (vers le haut) ou précédente, Maj = ×10 ; MIP : angle ±10°
+    const s = sliders[v];
+    if (!s || s.disabled || !dy || (v === "mip" && r !== "a")) return;
+    e.preventDefault();
+    const d = (dy < 0 ? 1 : -1) * (v === "mip" ? 10 : 1) * (e.shiftKey ? 10 : 1);
+    s.value = v === "mip" ? ((+s.value + d) % 360 + 360) % 360 : clamp(+s.value + d, 0, +s.max);
+    s.dispatchEvent(new Event("input"));
+  }, { passive: false });
+}
+
+// Ligne mix : poignée(s) au-dessus des images, toutes liées à la même position split (0..1) ; souris, doigt ou flèches (±1 %).
+function setSplit(f) {
+  split = Math.round(clamp(f, 0, 1) * 1000) / 1000;
+  for (const k of document.querySelectorAll(".knob")) { k.style.left = split * 100 + "%"; k.setAttribute("aria-valuenow", Math.round(split * 100)); }
+  if (!cmpReady || mixMode() !== "swipe") return;
+  for (const [v] of views) { loadImg(v, "m"); drawCell(v, "m"); }
+}
+function setupSplit() {
+  for (const bar of document.querySelectorAll(".splitbar")) {
+    const at = e => { const b = bar.getBoundingClientRect(); setSplit((e.clientX - b.left) / b.width); };
+    bar.onpointerdown = e => {
+      e.preventDefault(); bar.setPointerCapture(e.pointerId); bar.querySelector(".knob").focus(); at(e);
+      bar.onpointermove = at;
+      bar.onpointerup = bar.onpointercancel = () => { bar.onpointermove = null; };
+    };
+    bar.querySelector(".knob").onkeydown = e => {
+      const d = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
+      if (!d) return;
+      e.preventDefault(); setSplit(split + d / 100);
+    };
+  }
+  setSplit(split);
+}
+// Ligne du bas : mix A | B (poignée visible) ou différence A − B.
+function syncMix() {
+  const sw = mixMode() === "swipe";
+  document.querySelectorAll("[data-rn=m]").forEach(e => e.textContent = sw ? "A | B" : "A − B");
+  document.querySelectorAll(".splitbar").forEach(e => e.hidden = !sw);
+  $("diffhint").hidden = !cmpReady || sw;
+  if (cmpMode === "swipe" || cmpMode === "diff") cmpMode = mixMode();
+}
+// Séance B prête ou non : affiche ou masque les lignes B et mix (et les MIP correspondants).
+function setCmpReady(on) {
+  cmpReady = on;
+  document.querySelectorAll(".cmponly").forEach(e => e.hidden = !on);
+  $("cmpui").hidden = !on; $("cmphint").hidden = on;
+  if (!on) cmpMode = "a";
+  syncMix();
+}
+
 // MIP rotatif : le serveur calcule les images (tous les 10°) en arrière-plan ; lecture et curseur s'activent quand tout est prêt.
 let mipToken = 0, playTimer = 0;
 async function watchMips() {
-  const my = ++mipToken, play = $("play"), s = sliders.mip;
+  const my = ++mipToken, play = $("play");
   mipsReady = false; syncMip(); play.textContent = "Calcul du MIP…";
   for (let k = 0; k < 300 && my === mipToken; k++) {
     const r = await (await fetch("/mips")).json();
@@ -654,7 +800,7 @@ async function watchMips() {
     await new Promise(r => setTimeout(r, 1000));
   }
 }
-// Alignement fin : trois curseurs (z, y, x) par séance. Chaque séance se décale indépendamment ; tableau des lésions et mesures suivent.
+// Alignement fin : trois curseurs (z, y, x) par séance. Chaque séance se décale indépendamment ; tableau et mesures suivent.
 const AXES = [["z", "tête (+) / pieds (−)"], ["y", "arrière (+) / avant (−)"], ["x", "gauche du patient (+) / droite (−)"]];
 function buildOffsets() {
   $("offs").innerHTML = ["A", "B"].map(s => `<fieldset class="layers"><legend>Séance ${s}</legend>` +
@@ -699,15 +845,11 @@ function offChanged() {
   clearTimeout(offT); offT = setTimeout(() => { lesions(); remeasure(); }, 350);  // tableau et mesures suivent, après une courte pause
 }
 
-// Le MIP tourné n'existe que pour la séance A : en comparaison, MIP de face seulement (curseur et lecture désactivés).
+// Le MIP tourné n'existe que pour la séance A (B et le mix sont de face) : curseur et lecture actifs quand les images sont prêtes.
 function syncMip() {
-  const s = sliders.mip, off = cmpMode !== "a" || !mipsReady;
+  const s = sliders.mip;
   if (!s) return;
-  s.disabled = off; $("play").disabled = off;
-  if (cmpMode !== "a") {
-    if (playTimer) { clearInterval(playTimer); playTimer = 0; $("play").textContent = "Lecture"; }
-    if (+s.value !== 0) { s.value = 0; refreshView("mip"); }
-  }
+  s.disabled = !mipsReady; $("play").disabled = !mipsReady;
 }
 
 // Comparaison de deux séances : B est chargée et recalée sur A par le serveur (quelques secondes) ; on suit sa progression.
@@ -724,7 +866,7 @@ async function watchCompare() {
     const s = await (await fetch("/cstatus")).json();
     if (s.status === "loading") { $("cmsg").textContent = s.message; await new Promise(r => setTimeout(r, 700)); continue; }
     $("cmsg").textContent = s.status === "error" ? s.message : "";
-    $("cmpui").hidden = !s.ready;
+    setCmpReady(!!s.ready);
     if (s.ready) {
       const mm = (s.shift_mm || []).map(v => String(v).replace(".", ",")).join(" ; ");
       $("cinfo").textContent = `A : ${s.date_a || "?"}${s.weight_a ? " (" + s.weight_a + ")" : ""} · B : ${s.date_b || "?"}${s.weight_b ? " (" + s.weight_b + ")" : ""}. ` +
@@ -761,6 +903,7 @@ async function watchOrgans(keep = false) {  // keep : remettre la surcouche si e
                            `<td>${o.suv_max.toFixed(1)}</td><td>${o.suv_mean.toFixed(1)}</td><td>${o.hu_mean.toFixed(0)}</td></tr>`).join("");
       $("organs").hidden = false; box.disabled = false;
       if (was) { box.checked = true; refresh(); }
+      lesions();  // la localisation des points de fixation n'est disponible qu'une fois les organes calculés
       return;
     }
     $("orgmsg").textContent = "(calcul…)";
@@ -770,12 +913,12 @@ async function watchOrgans(keep = false) {  // keep : remettre la surcouche si e
 
 // Nom de l'organe sous la souris (si la surcouche est active) ; une requête à la fois.
 let tipBusy = false;
-async function organTip(v, x, y) {
+async function organTip(v, row, x, y) {
   const tip = $("tip");
   if (!$("orgs").checked) { tip.hidden = true; return; }
   if (tipBusy) return;
   tipBusy = true;
-  const r = $("img-" + v).getBoundingClientRect(), [X, Y] = toFull(v, (x - r.left) / r.width, (y - r.top) / r.height);
+  const r = $("img-" + key(v, row)).getBoundingClientRect(), [X, Y] = toFull(v, (x - r.left) / r.width, (y - r.top) / r.height);
   try {
     const o = await (await fetch(`/organ_at?view=${v}&i=${cur(v)}&fx=${X}&fy=${Y}&oa=${offParam("A")}`)).json();
     tip.hidden = !o.nom || v === "mip"; tip.textContent = o.nom || "";
@@ -783,19 +926,20 @@ async function organTip(v, x, y) {
   } finally { tipBusy = false; }
 }
 
-// Source de mesure : « Région % » pour le TEP, « Tolérance HU » pour le CT.
+// Source de mesure : « Région % » pour le TEP, « Tolérance HU » pour le CT ; réglages visibles avec l'outil « Mesure auto ».
 function syncSrc() {
   const ct = $("src").value === "ct";
   $("pctbox").hidden = ct; $("tolbox").hidden = !ct;
 }
+const syncTool = () => $("autoopts").hidden = tool() !== "auto";
 
 // Molette sur n'importe quel curseur (ou son libellé) : ±1 step, Maj = ×10, puis événement « input » (les oninput suivent).
 // Molette vers le haut = valeur suivante (+1 coupe pour les curseurs de coupe).
 document.addEventListener("wheel", e => {
   const t = e.target.type === "range" ? e.target : e.target.closest && e.target.closest("label")?.querySelector("input[type=range]");
-  if (!t || t.disabled) return;  // sur une image, la molette zoome (gestionnaire propre à l'image)
+  if (!t || t.disabled) return;  // sur une image, la molette a son propre gestionnaire (coupes, Ctrl : zoom)
   e.preventDefault();
-  t.value = clamp(+t.value + (e.deltaY < 0 ? 1 : -1) * (+t.step || 1) * (e.shiftKey ? 10 : 1), +t.min, +t.max);
+  t.value = clamp(+t.value + ((e.deltaY || e.deltaX) < 0 ? 1 : -1) * (+t.step || 1) * (e.shiftKey ? 10 : 1), +t.min, +t.max);
   t.dispatchEvent(new Event("input", { bubbles: true }));
 }, { passive: false });
 
@@ -804,13 +948,7 @@ $("vmax").oninput = $("cmap").onchange = $("alpha").oninput = refresh;
 $("mode").onchange = () => { if ($("mode").value === "ct" && !$("srcbox").hidden) $("src").value = "ct"; syncSrc(); refresh(); };
 $("src").onchange = syncSrc;
 $("orgs").onchange = refresh;
-// Comparaison : séance affichée (A, B, curseur A | B, différence A − B)
-document.querySelectorAll("input[name=cmp]").forEach(r => r.onchange = () => {
-  cmpMode = document.querySelector("input[name=cmp]:checked").value;
-  $("splitbox").hidden = cmpMode !== "swipe";
-  syncMip(); rev++; refresh();
-});
-$("split").oninput = () => { $("splitv").textContent = $("split").value; refresh(); };
+$("mixmode").onchange = () => { syncMix(); refresh(); };
 $("cload").onclick = openCompare;
 $("autoalign").onclick = autoAlign;
 $("cfolder").onkeydown = e => { if (e.key === "Enter") openCompare(); };
@@ -858,10 +996,11 @@ $("browse").onclick = async () => {
   if (r.folder) { $("folder").value = r.folder; openFolder(); }
 };
 // Export PDF : envoie l'état de l'écran (3 coupes, zoom, réglages, mesures, infos patient) ; le serveur refait le rendu.
+// La séance exportée est celle de la dernière ligne cliquée (A, B, mix A | B ou différence).
 $("pdf").onclick = async () => {
   const state = {
-    views: ["axial", "coronal", "sagittal"].map(v => ({ view: v, i: cur(v), z: zoom[v].z, x0: zoom[v].x0, y0: zoom[v].y0 })),
-    vmax: +$("vmax").value, cmap: $("cmap").value, mode: $("mode").value, alpha: +$("alpha").value, organs: $("orgs").checked, cmp: cmpMode, split: $("split").value / 100, oa: off.A.map(v => -v), ob: off.B.map(v => -v),
+    views: SLICES.map(v => ({ view: v, i: cur(v), z: zoom[v].z, x0: zoom[v].x0, y0: zoom[v].y0 })),
+    vmax: +$("vmax").value, cmap: $("cmap").value, mode: $("mode").value, alpha: +$("alpha").value, organs: $("orgs").checked, cmp: cmpMode, split, oa: off.A.map(v => -v), ob: off.B.map(v => -v),
     measures: ms.map(m => ({ v: m.v, i: m.i, text: m.text, items: m.items })),
   };
   $("pdf").disabled = true;
@@ -876,9 +1015,9 @@ $("pdf").onclick = async () => {
   } catch (e) { $("loadmsg").textContent = "Export PDF impossible : " + e.message; }
   $("pdf").disabled = false;
 };
-$("reset").onclick = () => { for (const [v] of views) zoom[v] = { z: 1, x0: 0, y0: 0 }; refresh(); };
+$("reset").onclick = () => { for (const [v] of views) zoom[v] = { z: 1, x0: 0, y0: 0 }; syncZoom(1); refresh(); };
 $("clear").onclick = () => { ms.length = 0; pending = null; marker = null; showRes(); drawAll(); };
-document.querySelectorAll("input[name=tool]").forEach(r => r.onchange = () => { pending = null; showRes(); drawAll(); updateLoupe(); });
+document.querySelectorAll("input[name=tool]").forEach(r => r.onchange = () => { pending = null; syncTool(); showRes(); drawAll(); updateLoupe(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") { pending = null; showRes(); drawAll(); } });
 // Panneau de droite redimensionnable : on glisse son bord gauche ; la largeur choisie est mémorisée dans le navigateur.
 const setInsp = w => { document.documentElement.style.setProperty("--insp", clamp(w, 320, 760) + "px"); drawAll(); };
@@ -891,7 +1030,16 @@ $("grip").onpointerdown = e => {
     localStorage.setItem("insp", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--insp")));
   };
 };
-window.addEventListener("resize", drawAll);  // les images changent de taille avec la fenêtre : les mesures se redessinent
+// Roue crantée : affiche / masque le panneau de droite (état mémorisé) ; masqué, les images prennent toute la largeur.
+function setInspHidden(h) {
+  $("app").classList.toggle("noinsp", h);
+  $("gear").setAttribute("aria-expanded", String(!h));
+  try { localStorage.setItem("inspHidden", h ? "1" : ""); } catch {}
+}
+$("gear").onclick = () => setInspHidden(!$("app").classList.contains("noinsp"));
+try { setInspHidden(localStorage.getItem("inspHidden") === "1"); } catch {}
+new ResizeObserver(layout).observe(document.querySelector("main"));  // fenêtre, panneau ou roue crantée : les images suivent la largeur
+syncTool();
 buildOffsets();
 start();
 </script>
