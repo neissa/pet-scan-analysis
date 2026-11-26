@@ -262,3 +262,15 @@ def test_autoalign_route_global_local_and_errors():
         assert _get(srv, "/autoalign?scope=local&c=500,45,45")[0] == 200                    # coupe > 400 : un centre n'est pas un décalage
     finally:
         srv.shutdown()
+
+
+def test_progress_resets_on_open_and_after_load(tmp_path):
+    state = State()
+    state.progress = 1.0  # reste du chargement précédent
+    assert state.open(str(tmp_path))  # dossier vide : le chargement échoue vite
+    assert state.progress is None  # la barre ne doit pas repartir à 100 %
+    for _ in range(100):
+        if state.status != "loading":
+            break
+        time.sleep(0.05)
+    assert state.status == "error" and state.progress is None

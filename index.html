@@ -175,6 +175,8 @@
     <label class="row" id="tolbox" title="Molette pour ajuster" hidden><span>Tolérance ± <b id="tolv">50</b> HU</span>
       <input id="tol" type="range" min="5" max="300" step="5" value="50"></label>
   </div>
+  <label class="row" id="alphabox" hidden title="Opacité du TEP sur le CT (molette pour ajuster)"><span>Opacité TEP <b id="alphav">60</b> %</span>
+    <input id="alpha2" type="range" min="0" max="1" step="0.05" value="0.6"></label>
   <button id="reset">Réinitialiser le zoom</button>
 </nav>
 
@@ -196,7 +198,7 @@
           <div id="ctlayers" role="radiogroup" aria-label="Couche CT"></div>
         </fieldset>
         <label class="row"><span>Opacité du TEP</span>
-          <input id="alpha" type="range" min="0.1" max="1" step="0.05" value="0.6"></label>
+          <input id="alpha" type="range" min="0" max="1" step="0.05" value="0.6"></label>
       </div>
       <label class="row"><span>Palette</span>
         <select id="cmap"><option>jet</option><option>hot</option><option value="gray_r">gris</option></select></label>
@@ -253,6 +255,9 @@
       <summary>Points de fixation</summary>
       <label class="row"><span>Seuil des points de fixation (SUV)</span>
         <input id="thr" type="number" value="2.5" step="0.1" min="0"></label>
+      <label class="row" title="Masque les points plus petits (bruit : quelques voxels isolés)"><span>Volume minimum (ml)</span>
+        <input id="volmin" type="number" value="0.1" step="0.1" min="0"></label>
+      <p class="note" id="lescount"></p>
       <label class="row"><span>Favoris seulement (★)</span>
         <input id="favonly" type="checkbox"></label>
       <table id="tbl"></table>
@@ -260,7 +265,7 @@
 
     <p class="note">Recherche uniquement, pas un dispositif médical. Molette sur une image : coupe suivante / précédente (Maj = ×10 ;
       sur le MIP : angle ±10°) ; Ctrl + molette : zoom centré sur la souris. Le curseur vertical à gauche de chaque ligne zoome les trois vues
-      autour du point courant. Molette sur un curseur : ajuste sa valeur (Maj = ×10). Une loupe ×4 suit la souris avec la règle et la mesure auto.
+      autour du point courant. Molette sur un curseur : ajuste sa valeur (Maj = ×10). Une loupe ×4 suit la souris.
       Un clic sur un point de fixation du tableau y amène les trois coupes.</p>
   </aside>
   <div id="grip" role="separator" aria-orientation="vertical" title="Glisser pour élargir ou réduire le panneau"></div>
@@ -448,7 +453,7 @@ function drawCell(v, r) {
 function updateLoupe() {
   const L = $("loupe"), m = lastMove;
   const img = m && $("img-" + key(m.v, m.r)), c = m && $("cv-" + key(m.v, m.r));
-  if (!m || !img || tool() === "nav" || !img.naturalWidth || !c.width) { L.hidden = true; return; }
+  if (!m || !img || !img.naturalWidth || !c.width) { L.hidden = true; return; }
   const r = img.getBoundingClientRect(), S = 160, Z = 4, w = S / Z, k = img.naturalWidth / r.width;
   const cx = m.x - r.left, cy = m.y - r.top, g = L.getContext("2d");
   g.fillStyle = "#000"; g.fillRect(0, 0, S, S);
@@ -558,7 +563,10 @@ function renderLesions() {
   const { key, dir } = lesSort;
   const favs = favSet();
   lesionList.forEach(l => { l.fav = favs.has(favId(l)) ? 1 : 0; l.dist = distTo(l); });
-  const rows = lesionList.filter(l => !$("favonly").checked || l.fav).sort((a, b) => {
+  const vmin = parseFloat($("volmin").value) || 0;
+  const shown = lesionList.filter(l => l.mtv_ml >= vmin);
+  $("lescount").textContent = `${shown.length} point${shown.length > 1 ? "s" : ""} affiché${shown.length > 1 ? "s" : ""} sur ${lesionList.length}`;
+  const rows = shown.filter(l => !$("favonly").checked || l.fav).sort((a, b) => {
     const x = a[key], y = b[key], nx = x == null || x === "", ny = y == null || y === "";
     if (nx || ny) return nx - ny || a.n - b.n;
     return (typeof x === "string" ? x.localeCompare(y, "fr") : x - y) * dir || a.n - b.n;
@@ -979,8 +987,22 @@ async function organTip(v, row, x, y) {
 function syncSrc() {
   const ct = $("src").value === "ct";
   $("pctbox").hidden = ct; $("tolbox").hidden = !ct;
+  if (tool() === "auto") alphaForMeasure($("src").value);
 }
-const syncTool = () => $("autoopts").hidden = tool() !== "auto";
+const syncTool = () => { $("autoopts").hidden = tool() !== "auto"; $("alphabox").hidden = tool() === "nav"; syncSrc(); };
+
+// Opacité du TEP : un seul réglage, deux curseurs (panneau de droite et barre d'outils) gardés identiques.
+function setAlpha(a) {
+  $("alpha").value = $("alpha2").value = a;
+  $("alphav").textContent = Math.round($("alpha").value * 100);
+  refresh();
+}
+// Au choix de la mesure auto ou de sa source (TEP / CT) : TEP au moins 70 % pour bien le voir ; CT au plus 20 % pour voir le CT.
+// Sinon on n'y touche pas, et l'utilisateur règle ensuite de 0 à 100 % comme il veut.
+function alphaForMeasure(src) {
+  const a = +$("alpha").value;
+  if (src === "ct" ? a > 0.2 : a < 0.7) setAlpha(src === "ct" ? 0.2 : 0.7);
+}
 
 // Molette sur n'importe quel curseur (ou son libellé) : ±1 step, Maj = ×10, puis événement « input » (les oninput suivent).
 // Molette vers le haut = valeur suivante (+1 coupe pour les curseurs de coupe).
@@ -993,7 +1015,9 @@ document.addEventListener("wheel", e => {
 }, { passive: false });
 
 // Réglages statiques (créés une seule fois)
-$("vmax").oninput = $("cmap").onchange = $("alpha").oninput = refresh;
+$("vmax").oninput = $("cmap").onchange = refresh;
+$("alpha").oninput = () => setAlpha($("alpha").value);
+$("alpha2").oninput = () => setAlpha($("alpha2").value);
 $("mode").onchange = () => { if ($("mode").value === "ct" && !$("srcbox").hidden) $("src").value = "ct"; syncSrc(); refresh(); };
 $("src").onchange = syncSrc;
 $("orgs").onchange = refresh;
@@ -1034,7 +1058,7 @@ $("ctlayers").onchange = async () => {
   }
   syncMode();
 };
-$("favonly").onchange = renderLesions;
+$("favonly").onchange = $("volmin").oninput = renderLesions;
 $("thr").onchange = lesions; // Entrée ou perte du focus : tout de suite
 $("thr").oninput = () => { clearTimeout(lesTimer); lesTimer = setTimeout(lesions, 350); };  // en tapant ou avec les flèches : après une courte pause
 $("pct").oninput = () => { $("pctv").textContent = $("pct").value; remeasure(); };

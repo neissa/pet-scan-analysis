@@ -411,6 +411,7 @@ class State:
             if self.vol is None or self.cmp_status == "loading":
                 return False
             self.cmp_status, self.cmp_message = "loading", "Chargement de la séance B…"
+            self.cmp_progress = None
         threading.Thread(target=self._load_compare, args=(folder, self.vol), daemon=True).start()
         return True
 
@@ -450,6 +451,7 @@ class State:
             if self.status == "loading":
                 return False
             self.status, self.message = "loading", f"Chargement de {folder}…"
+            self.progress = None  # sinon la barre repartirait de la valeur finale du chargement précédent (100 %)
         threading.Thread(target=self._load, args=(folder,), daemon=True).start()
         return True
 
@@ -476,6 +478,7 @@ class State:
             remember(folder)
             if ctv is not None:
                 threading.Thread(target=self._organs, args=(self.vol, uid), daemon=True).start()
+        self.progress = None
 
 
 def make_handler(state):

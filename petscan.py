@@ -1,5 +1,7 @@
 """TEP (PET) injecté : série DICOM -> volume SUV -> statistiques par lésion."""
 import argparse
+import os
+from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -23,18 +25,95 @@ def _scaled(progress, a, b):
     return None if progress is None else (lambda f: progress(a + (b - a) * f))
 
 
+def n_workers():
+    """Processus de lecture en parallèle, d'après la machine : ses cœurs utilisables moins un (pour le serveur et la page),
+    au plus 8 (au-delà, le démarrage des processus coûte plus que le gain) ; 1 = lecture séquentielle."""
+    try:
+        n = len(os.sched_getaffinity(0))  # cœurs réellement alloués au processus (Linux)
+    except AttributeError:
+        n = os.cpu_count() or 1
+    return max(1, min(n - 1, 8))
+
+
+_CT_TAGS = ("Modality", "SeriesInstanceUID", "ImagePositionPatient", "ConvolutionKernel", "SeriesDescription")
+
+
+def _header(p):
+    try:
+        h = pydicom.dcmread(p, stop_before_pixels=True)  # en-tête seul : pas de pixels
+    except pydicom.errors.InvalidDicomError:
+        return None
+    if h.get("Modality") == "PT":  # le patient et le SUV lisent beaucoup de champs du TEP
+        return h
+    slim = pydicom.Dataset()  # les autres (surtout le CT, des milliers de fichiers) : seulement ce que la sélection de série utilise
+    for t in _CT_TAGS:
+        if t in h:
+            slim[t] = h[t]
+    return slim
+
+
+_pool = None
+_headers_cache = {}  # {(dossier, nb de fichiers): [(chemin, en-tête)]} : dernier dossier lu seulement
+
+
+def _headers(folder, progress=None):
+    """[(chemin, en-tête)] de tous les fichiers DICOM du dossier. Une seule lecture sert au TEP, au CT et au patient
+    (elle se fait en parallèle sur plusieurs processus) ; le résultat du dernier dossier est gardé tant qu'il ne change pas."""
+    global _pool
+    files = [p for p in Path(folder).rglob("*") if p.is_file()]
+    sig = (str(folder), len(files))  # un dossier dont on remplace des fichiers sans changer leur nombre n'est pas relu : relancer le serveur
+    if sig in _headers_cache:
+        return _headers_cache[sig]
+    heads = None
+    if n_workers() > 1 and len(files) >= 200:  # en dessous, le démarrage des processus ne vaut pas le coup
+        try:
+            _pool = _pool or ProcessPoolExecutor(n_workers())
+            heads = []
+            for k, h in enumerate(_pool.map(_header, files, chunksize=32)):
+                heads.append(h)
+                if progress and k % 25 == 0:
+                    progress(k / len(files))
+        except (BrokenExecutor, OSError):  # processus indisponibles : lecture séquentielle
+            _pool, heads = None, None
+    if heads is None:
+        heads = []
+        for k, p in enumerate(files):
+            if progress and k % 25 == 0:
+                progress(k / len(files))
+            heads.append(_header(p))
+    _headers_cache.clear()
+    _headers_cache[sig] = out = [(p, h) for p, h in zip(files, heads) if h is not None]
+    return out
+
+
+def _read_all(paths, progress=None):
+    """Datasets complets (avec pixels) des fichiers, dans l'ordre ; lus en parallèle comme les en-têtes."""
+    global _pool
+    out = None
+    if n_workers() > 1 and len(paths) >= 50:
+        try:
+            _pool = _pool or ProcessPoolExecutor(n_workers())
+            out = []
+            for k, d in enumerate(_pool.map(pydicom.dcmread, paths, chunksize=8)):
+                out.append(d)
+                if progress and k % 10 == 0:
+                    progress(k / len(paths))
+        except (BrokenExecutor, OSError):
+            _pool, out = None, None
+    if out is None:
+        out = []
+        for k, p in enumerate(paths):
+            out.append(pydicom.dcmread(p))
+            if progress and k % 10 == 0:
+                progress(k / len(paths))
+    return out
+
+
 def _scan(folder, modality, progress=None):
     """{SeriesInstanceUID: [(chemin, en-tête)]} des séries d'une modalité DICOM (fichiers avec ou sans extension).
     progress(f) : avancement de 0 à 1 (facultatif, pour l'interface)."""
     out = {}
-    files = [p for p in Path(folder).rglob("*") if p.is_file()]
-    for k, p in enumerate(files):
-        if progress and k % 25 == 0:
-            progress(k / len(files))
-        try:
-            h = pydicom.dcmread(p, stop_before_pixels=True)
-        except pydicom.errors.InvalidDicomError:
-            continue
+    for p, h in _headers(folder, progress):
         if h.get("Modality") == modality:
             out.setdefault(h.SeriesInstanceUID, []).append((p, h))
     return out
@@ -48,11 +127,7 @@ def load_suv(folder, progress=None):
     if not series:
         raise SystemExit(f"Aucune série PET dans {folder}")
     paths = max(series.values(), key=len)
-    read = []
-    for k, (p, _) in enumerate(paths):
-        read.append(pydicom.dcmread(p))
-        if progress and k % 10 == 0:
-            progress(0.4 + 0.5 * k / len(paths))
+    read = _read_all([p for p, _ in paths], _scaled(progress, 0.4, 0.9))
     slices = sorted(read, key=lambda s: float(s.ImagePositionPatient[2]))
     s0 = slices[0]
     if s0.Units != "BQML":
@@ -110,11 +185,7 @@ def load_ct(folder, shape, spacing, origin, uid=None, series=None, progress=None
     if not series:
         return None
     uid = uid if uid in series else default_ct_uid(series, origin)
-    read = []
-    for k, (p, _) in enumerate(series[uid]):
-        read.append(pydicom.dcmread(p))
-        if progress and k % 10 == 0:
-            progress(0.6 * k / len(series[uid]))
+    read = _read_all([p for p, _ in series[uid]], _scaled(progress, 0, 0.6))
     cts = sorted(read, key=lambda s: float(s.ImagePositionPatient[2]))
     if [round(v) for v in cts[0].ImageOrientationPatient] != [1, 0, 0, 0, 1, 0]:
         raise SystemExit("CT : orientation non axiale non gérée")
