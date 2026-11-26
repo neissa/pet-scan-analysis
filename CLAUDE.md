@@ -44,3 +44,5 @@ Lancer depuis la racine : `viewer.py` relit `index.html` à chaque requête (rec
   3. **Coder** le minimum nécessaire.
   4. **Tester** (`pytest -q`, et vérification dans le navigateur pour le front).
   5. **Recommencer** si l'objectif n'est pas atteint ; compter les échecs pour déclencher l'escalade.
+- **Worktrees sous Windows** : le chemin de ce dépôt est trop long pour git (`'$GIT_DIR' too big`), donc `isolation: "worktree"` échoue et laisse une branche `worktree-agent-*` vide. Contournement testé : `git worktree add -b <branche> C:/wt/<nom>`, puis l'agent travaille uniquement dans ce dossier (chemin absolu dans son brief) et commite sans pousser.
+- **Ménage obligatoire** une fois le travail d'un worktree fini et repris (merge ou cherry-pick) : vérifier le commit de l'agent, puis `git worktree remove C:/wt/<nom>`, `git branch -D <branche>` (y compris les `worktree-agent-*` orphelines), `git worktree prune`, et contrôler avec `git worktree list` et `git branch`.
