@@ -253,6 +253,8 @@
       <summary>Points de fixation</summary>
       <label class="row"><span>Seuil des points de fixation (SUV)</span>
         <input id="thr" type="number" value="2.5" step="0.1" min="0"></label>
+      <label class="row"><span>Favoris seulement (★)</span>
+        <input id="favonly" type="checkbox"></label>
       <table id="tbl"></table>
     </details>
 
@@ -324,6 +326,7 @@ function pick(view, X, Y) {
   else if (view === "sagittal") { set("coronal", ny, X); set("axial", nz, 1 - Y); }
   else { set("sagittal", nx, X); set("axial", nz, 1 - Y); }  // coronal ou mip
   refresh();
+  if (lesionList.length) renderLesions();  // la colonne Dist. repart du nouveau point
 }
 
 // Point du curseur croisé (coupes courantes) sur une vue, en fractions de l'image entière.
@@ -528,12 +531,24 @@ async function lesions() {
 }
 
 // Tri par colonne : clic sur l'en-tête (ou Entrée) ; un 2e clic inverse. Les valeurs manquantes (Δ % sans B, localisation) restent toujours en bas.
-const LES_COLS = [["n", "#"], ["suv_max", "SUVmax"], ["suv_mean", "SUVmean"], ["mtv_ml", "MTV ml"], ["tlg", "TLG"],
+// Favoris : mémorisés dans le navigateur, par dossier de la séance A ; un point = sa position de pic (z,y,x).
+const favKey = () => "fav:" + $("folder").value.trim();
+const favId = l => l.peak.join(",");
+const favSet = () => new Set(JSON.parse(localStorage.getItem(favKey()) || "[]"));
+function toggleFav(l) {
+  const s = favSet(), id = favId(l);
+  s.has(id) ? s.delete(id) : s.add(id);
+  localStorage.setItem(favKey(), JSON.stringify([...s]));
+  renderLesions();
+}
+// Distance (mm) entre le curseur croisé (dernier point cliqué ou point de fixation choisi) et le pic, en tenant compte des décalages de A.
+const distTo = l => Math.hypot(...l.peak.map((p, k) => (p + off.A[k] - cur(["axial", "coronal", "sagittal"][k])) * spacing[k]));
+const LES_COLS =[["fav", "★"], ["n", "#"], ["dist", "Dist. mm"], ["suv_max", "SUVmax"], ["suv_mean", "SUVmean"], ["mtv_ml", "MTV ml"], ["tlg", "TLG"],
                   ["suv_b", "SUVmax B"], ["delta_pct", "Δ %"], ["organe", "Localisation"]];
 let lesSort = { key: "n", dir: 1 };  // dir : 1 croissant, -1 décroissant ; le tri est conservé quand le seuil ou les décalages changent
 function sortBy(k) {
   // 1er clic : le plus grand d'abord (sauf # et la localisation, par ordre alphabétique)
-  lesSort = lesSort.key === k ? { key: k, dir: -lesSort.dir } : { key: k, dir: k === "n" || k === "organe" ? 1 : -1 };
+  lesSort = lesSort.key === k ? { key: k, dir: -lesSort.dir } : { key: k, dir: k === "n" || k === "organe" || k === "dist" ? 1 : -1 };
   renderLesions();
 }
 function renderLesions() {
@@ -541,7 +556,9 @@ function renderLesions() {
   const cols = LES_COLS.filter(([k]) => cc || (k !== "suv_b" && k !== "delta_pct"));
   if (!cols.some(([k]) => k === lesSort.key)) lesSort = { key: "n", dir: 1 };  // colonne B disparue : tri par défaut
   const { key, dir } = lesSort;
-  const rows = [...lesionList].sort((a, b) => {
+  const favs = favSet();
+  lesionList.forEach(l => { l.fav = favs.has(favId(l)) ? 1 : 0; l.dist = distTo(l); });
+  const rows = lesionList.filter(l => !$("favonly").checked || l.fav).sort((a, b) => {
     const x = a[key], y = b[key], nx = x == null || x === "", ny = y == null || y === "";
     if (nx || ny) return nx - ny || a.n - b.n;
     return (typeof x === "string" ? x.localeCompare(y, "fr") : x - y) * dir || a.n - b.n;
@@ -554,15 +571,18 @@ function renderLesions() {
   const loc = l => `<td class="loc">${l.organe === undefined ? "" : l.organe == null ? "—" : esc(l.organe)}</td>`;
   $("tbl").innerHTML = "<tr>" + cols.map(([k, t]) => `<th data-k="${k}"${k === "organe" ? ' class="loc"' : ""} tabindex="0" role="button" title="Trier par cette colonne" ` +
       `aria-sort="${k === key ? (dir > 0 ? "ascending" : "descending") : "none"}">${t}${k === key ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") + "</tr>" +
-    rows.map((l, i) => `<tr class="les" data-i="${i}" tabindex="0" title="Aller à ce point de fixation"><td>${l.n}</td><td>${l.suv_max.toFixed(2)}</td>` +
+    rows.map((l, i) => `<tr class="les" data-i="${i}" tabindex="0" title="Aller à ce point de fixation"><td class="fav" role="button" aria-label="Favori" aria-pressed="${!!l.fav}" title="Ajouter ou retirer des favoris">${l.fav ? "★" : "☆"}</td><td>${l.n}</td><td>${l.dist.toFixed(0)}</td><td>${l.suv_max.toFixed(2)}</td>` +
       `<td>${l.suv_mean.toFixed(2)}</td><td>${l.mtv_ml.toFixed(1)}</td><td>${l.tlg.toFixed(1)}</td>` +
       (cc ? `<td>${l.suv_b.toFixed(2)}</td>${evo(l)}` : "") + loc(l) + `</tr>`).join("");
   for (const th of $("tbl").querySelectorAll("th[data-k]")) {
     th.onclick = () => sortBy(th.dataset.k);
     th.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); th.onclick(); } };
+    if (th.dataset.k === "dist") th.title = "Trier par distance au dernier point cliqué";
   }
   for (const tr of $("tbl").querySelectorAll("tr.les")) {
-    tr.onclick = () => gotoLesion(rows[tr.dataset.i]);
+    tr.onmouseenter = tr.onfocus = () => { hover = { z: rows[tr.dataset.i].peak[0], y: rows[tr.dataset.i].peak[1], x: rows[tr.dataset.i].peak[2] }; drawAll(); };
+    tr.onmouseleave = tr.onblur = () => { hover = null; drawAll(); };
+    tr.onclick = e => e.target.closest("td.fav") ? toggleFav(rows[tr.dataset.i]) : gotoLesion(rows[tr.dataset.i]);
     tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(); } };
   }
 }
@@ -575,29 +595,39 @@ function gotoLesion(l) {
   // vues zoomées : on recentre sur le point pour qu'il reste visible
   for (const [v] of views) if (zoom[v].z > 1) zoom[v] = centered(v, zoom[v].z);
   refresh();
+  renderLesions();  // la colonne Dist. repart de ce point
 }
 
 // Position du repère (fractions de l'image entière) sur une vue, ou null s'il est hors de la coupe affichée.
-function markerPos(v, r) {
-  if (!marker) return null;
-  const [nz, ny, nx] = shape, z = marker.z + off.A[0], y = marker.y + off.A[1], x = marker.x + off.A[2];
-  if (v === "axial") return Math.abs(cur(v) - z) <= 1 ? [(x + .5) / nx, (y + .5) / ny] : null;
-  if (v === "coronal") return Math.abs(cur(v) - y) <= 1 ? [(x + .5) / nx, 1 - (z + .5) / nz] : null;
-  if (v === "sagittal") return Math.abs(cur(v) - x) <= 1 ? [(y + .5) / ny, 1 - (z + .5) / nz] : null;
-  return !sliders.mip || curFor(v, r) === 0 ? [(x + .5) / nx, 1 - (z + .5) / nz] : null;
+// Avec any (survol), le point est projeté même hors de la coupe affichée ; le 3e élément dit s'il est dans la coupe.
+function markerPos(v, r, m = marker, any = false) {
+  if (!m) return null;
+  const [nz, ny, nx] = shape, z = m.z + off.A[0], y = m.y + off.A[1], x = m.x + off.A[2];
+  const [p, d] = v === "axial" ? [[(x + .5) / nx, (y + .5) / ny], cur(v) - z]
+    : v === "coronal" ? [[(x + .5) / nx, 1 - (z + .5) / nz], cur(v) - y]
+    : v === "sagittal" ? [[(y + .5) / ny, 1 - (z + .5) / nz], cur(v) - x]
+    : [[(x + .5) / nx, 1 - (z + .5) / nz], sliders.mip && curFor(v, r) !== 0 ? 9 : 0];  // MIP : seulement à 0°
+  if (Math.abs(d) > 1 && !(any && v !== "mip")) return null;
+  return [...p, Math.abs(d) <= 1];
 }
 
 // Repère de localisation : anneau à centre vide et 4 branches, deux traits (noir puis couleur) pour rester visible sur tout fond.
+let hover = null;  // point survolé dans le tableau {z, y, x}
 function drawMarker(v, r, g, P) {
-  const p = markerPos(v, r);
+  drawRing(v, r, g, P, markerPos(v, r), "#ff375f");
+  drawRing(v, r, g, P, markerPos(v, r, hover, true), "#ffd60a");
+}
+function drawRing(v, r, g, P, p, color) {
   if (!p) return;
   const [x, y] = P(p);
-  for (const [col, lw] of [["#000", 5], ["#ff375f", 2.5]]) {
+  g.globalAlpha = p[2] ? 1 : .5;  // hors de la coupe affichée : repère estompé
+  for (const [col, lw] of [["#000", 5], [color, 2.5]]) {
     g.strokeStyle = col; g.lineWidth = lw; g.beginPath();
     g.arc(x, y, 12, 0, 7);
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { g.moveTo(x + dx * 12, y + dy * 12); g.lineTo(x + dx * 26, y + dy * 26); }
     g.stroke();
   }
+  g.globalAlpha = 1;
 }
 
 // --- dossier de travail : choix, chargement en arrière-plan, reconstruction de la page ---
@@ -1004,7 +1034,8 @@ $("ctlayers").onchange = async () => {
   }
   syncMode();
 };
-$("thr").onchange = lesions;  // Entrée ou perte du focus : tout de suite
+$("favonly").onchange = renderLesions;
+$("thr").onchange = lesions; // Entrée ou perte du focus : tout de suite
 $("thr").oninput = () => { clearTimeout(lesTimer); lesTimer = setTimeout(lesions, 350); };  // en tapant ou avec les flèches : après une courte pause
 $("pct").oninput = () => { $("pctv").textContent = $("pct").value; remeasure(); };
 $("tol").oninput = () => { $("tolv").textContent = $("tol").value; remeasure(); };
