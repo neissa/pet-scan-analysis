@@ -24,7 +24,16 @@
   .tb-lead, .tb-trail { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 0; }
   .tb-lead > b { color: var(--label-2); white-space: nowrap; }
   .tb-trail { justify-content: flex-end; flex: 0 1 auto; }
-  #loadmsg, #cmsg { color: var(--warn); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
+  /* Toast : message de chargement ou d'erreur, en bas au centre, sans décaler la page */
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 20; display: flex; flex-direction: column; gap: 8px;
+           min-width: 240px; max-width: min(90vw, 560px); padding: 10px 16px; border-radius: 12px; background: rgba(44,44,46,.96); border: 1px solid var(--line);
+           box-shadow: 0 8px 24px rgba(0,0,0,.5); color: var(--label); }
+  #toast .bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+  #toast .bar i { display: block; height: 100%; width: 0; background: var(--focus); border-radius: 3px; transition: width .25s ease-out; }
+  #toast .bar.indet i { width: 35%; animation: slide 1.1s ease-in-out infinite alternate; }   /* durée inconnue : la barre va et vient */
+  #toast.err { color: var(--warn); }
+  @keyframes slide { from { margin-left: 0; } to { margin-left: 65%; } }
+  @media (prefers-reduced-motion: reduce) { #toast .bar.indet i { animation: none; width: 100%; opacity: .5; } #toast .bar i { transition: none; } }
   #folder, #cfolder { flex: 1 1 auto; min-width: 8rem; max-width: 34rem; }
   .tools { position: static; min-height: 44px; padding: 6px 16px; }
   #autoopts { display: flex; align-items: center; gap: 16px; }
@@ -140,10 +149,8 @@
     <input id="cfolder" type="text" list="recent" placeholder="Dossier DICOM de la séance B (autre date, même patient)" aria-label="Dossier de la séance B">
     <button id="cload">Comparer</button>
     <button id="cbrowse" hidden>Parcourir…</button>
-    <span id="cmsg" role="status"></span>
   </div>
   <div class="tb-trail">
-    <span id="loadmsg" role="status"></span>
     <button id="pdf" class="primary">Exporter PDF</button>
     <button id="gear" aria-label="Réglages" title="Afficher / masquer le panneau de réglages" aria-controls="inspector" aria-expanded="true">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -257,11 +264,23 @@
   <div id="grip" role="separator" aria-orientation="vertical" title="Glisser pour élargir ou réduire le panneau"></div>
 </div>
 
+<div id="toast" role="status" hidden><div id="toasttxt"></div><div class="bar" hidden><i></i></div></div>
 <div id="tip" hidden></div>
 <canvas id="loupe" width="160" height="160" hidden></canvas>
 
 <script>
 const $ = id => document.getElementById(id);
+// Toast : busy = chargement en cours (pastille tournante, reste affiché) ; sinon message qui disparaît seul (erreur). Texte vide = masquer.
+let toastT = 0;
+function toast(msg, busy = false, pct = null) {  // pct : avancement 0..1 renvoyé par le serveur (null = barre indéterminée)
+  clearTimeout(toastT);
+  const bar = $("toast").querySelector(".bar"), known = busy && typeof pct === "number";
+  $("toast").hidden = !msg; $("toast").classList.toggle("err", !busy);
+  bar.hidden = !busy; bar.classList.toggle("indet", busy && !known);
+  bar.firstElementChild.style.width = known ? Math.round(clamp(pct, 0, 1) * 100) + "%" : "";
+  $("toasttxt").textContent = (msg || "") + (known ? ` ${Math.round(clamp(pct, 0, 1) * 100)} %` : "");
+  if (msg && !busy) toastT = setTimeout(() => $("toast").hidden = true, 7000);
+}
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const views = [["axial", 0], ["coronal", 1], ["sagittal", 2], ["mip", null]];
 const SLICES = ["axial", "coronal", "sagittal"];
@@ -586,7 +605,7 @@ async function openFolder() {
   const f = $("folder").value.trim();
   if (!f) return;
   const r = await (await fetch("/open?folder=" + encodeURIComponent(f))).json();
-  if (r.error) { $("loadmsg").textContent = r.error; return; }
+  if (r.error) { toast(r.error); return; }
   watch();
 }
 
@@ -594,7 +613,7 @@ async function openFolder() {
 async function watch(rebuild = true) {
   for (;;) {
     const s = await (await fetch("/status")).json();
-    if (s.message) $("loadmsg").textContent = s.message;
+    if (s.message) toast(s.message, s.status === "loading", s.progress);
     if (s.status !== "loading") return s.status === "ready" ? (rebuild ? start() : afterCt()) : undefined;
     await new Promise(r => setTimeout(r, 700));
   }
@@ -604,7 +623,7 @@ async function start() {
   const info = await (await fetch("/info")).json();
   $("browse").hidden = !info.browse;
   $("recent").innerHTML = (info.recent || []).map(f => `<option value="${f.replace(/"/g, "&quot;")}">`).join("");
-  if (!info.loaded) { $("loadmsg").textContent = "Choisissez un dossier DICOM (TEP + CT)."; return watch(); }
+  if (!info.loaded) { toast("Choisissez un dossier DICOM (TEP + CT)."); return watch(); }
   $("folder").value = info.folder || "";
   await build(info);
 }
@@ -857,15 +876,15 @@ async function openCompare() {
   const f = $("cfolder").value.trim();
   if (!f) return;
   const r = await (await fetch("/compare?folder=" + encodeURIComponent(f))).json();
-  if (r.error) { $("cmsg").textContent = r.error; return; }
+  if (r.error) { toast(r.error); return; }
   zeroOffsets("B");  // nouvelle séance B : son décalage manuel repart de zéro
   watchCompare();
 }
 async function watchCompare() {
   for (;;) {
     const s = await (await fetch("/cstatus")).json();
-    if (s.status === "loading") { $("cmsg").textContent = s.message; await new Promise(r => setTimeout(r, 700)); continue; }
-    $("cmsg").textContent = s.status === "error" ? s.message : "";
+    if (s.status === "loading") { toast(s.message, true, s.progress); await new Promise(r => setTimeout(r, 700)); continue; }
+    toast(s.status === "error" ? s.message : "");
     setCmpReady(!!s.ready);
     if (s.ready) {
       const mm = (s.shift_mm || []).map(v => String(v).replace(".", ",")).join(" ; ");
@@ -886,7 +905,7 @@ function togglePlay() {
 }
 
 // Après un changement de série CT : mêmes coupes, nouvelle image, organes et mesures CT recalculés.
-function afterCt() { $("loadmsg").textContent = ""; rev++; refresh(); watchOrgans(true); remeasure(); }
+function afterCt() { toast(""); rev++; refresh(); watchOrgans(true); remeasure(); }
 
 // Organes : calculés par le serveur en arrière-plan ; la case s'active quand c'est prêt, avec légende et tableau.
 let orgToken = 0;
@@ -975,7 +994,7 @@ $("ctlayers").onchange = async () => {
   if (uid !== curCt) {  // autre série : rechargement du seul CT en arrière-plan (quelques secondes)
     const r = await (await fetch("/ctseries?uid=" + encodeURIComponent(uid))).json();
     if (r.error || r.started === false) {
-      $("loadmsg").textContent = r.error || "Chargement déjà en cours";
+      toast(r.error || "Chargement déjà en cours");
       const back = document.querySelector(`input[name=ctl][value="${curCt}"]`);
       if (back) back.checked = true;
       return;
@@ -1012,7 +1031,7 @@ $("pdf").onclick = async () => {
     a.href = URL.createObjectURL(await r.blob());
     a.download = `tep-ct-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.pdf`;
     a.click(); URL.revokeObjectURL(a.href);
-  } catch (e) { $("loadmsg").textContent = "Export PDF impossible : " + e.message; }
+  } catch (e) { toast("Export PDF impossible : " + e.message); }
   $("pdf").disabled = false;
 };
 $("reset").onclick = () => { for (const [v] of views) zoom[v] = { z: 1, x0: 0, y0: 0 }; syncZoom(1); refresh(); };

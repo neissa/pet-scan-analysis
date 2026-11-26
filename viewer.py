@@ -23,7 +23,7 @@ from compare import estimate_shift, refine_shift, shift_volume
 from export_pdf import build_pdf
 from organs import ORGANS, segment_organs
 from patient import read_patient_info
-from petscan import (analyze, ct_choices, ct_series, default_ct_uid, load_ct, load_suv, measure_region,
+from petscan import (_scaled, analyze, ct_choices, ct_series, default_ct_uid, load_ct, load_suv, measure_region,
                      measure_tolerance)
 
 AXIS = {"axial": 0, "coronal": 1, "sagittal": 2}
@@ -310,6 +310,7 @@ class State:
         self._ctcache = {}  # {uid: CT rééchantillonné} : un changement de série déjà chargée est instantané
         self._orgcache = {} # {uid: (labels, infos)} : idem pour les organes
         self.status, self.message = "idle", ""
+        self.progress = self.cmp_progress = None  # avancement 0..1 du chargement en cours (None = inconnu)
         self._lock = threading.Lock()
 
     def set(self, suv, spacing, ctv, patient=None, folder=""):
@@ -379,7 +380,7 @@ class State:
     def _reload_ct(self, uid):
         vol, cts, cache = self.vol, self.cts, self._ctcache
         try:
-            ctv = load_ct(vol[4], vol[0].shape, vol[1], cts["origin"], uid, cts["series"])
+            ctv = load_ct(vol[4], vol[0].shape, vol[1], cts["origin"], uid, cts["series"], progress=self._set_progress)
         except SystemExit as e:
             self.status, self.message = "error", str(e)
         except Exception as e:
@@ -388,6 +389,7 @@ class State:
             cache[uid] = ctv
             self._swap_ct(uid, ctv)
             self.status, self.message = "ready", ""
+        self.progress = None
 
     def _preload_cts(self, vol):
         """Charge en arrière-plan les autres séries CT du dossier : les changements de couche sont ensuite instantanés."""
@@ -414,17 +416,20 @@ class State:
 
     def _load_compare(self, folder, vol):
         try:
-            suv, spacing, origin = load_suv(folder)
+            prog = lambda f: setattr(self, "cmp_progress", f)
+            suv, spacing, origin = load_suv(folder, _scaled(prog, 0, 0.35))
             if any(abs(a - b) > 0.1 * a for a, b in zip(vol[1], spacing)):
                 raise SystemExit("Grilles incompatibles : espacement " + " × ".join(f"{s:.2f}" for s in spacing) +
                                  " mm contre " + " × ".join(f"{s:.2f}" for s in vol[1]) + " mm")
-            series = ct_series(folder)
-            ctb = load_ct(folder, suv.shape, spacing, origin, default_ct_uid(series, origin) if series else None, series)
+            series = ct_series(folder, _scaled(prog, 0.35, 0.45))
+            ctb = load_ct(folder, suv.shape, spacing, origin, default_ct_uid(series, origin) if series else None, series,
+                          _scaled(prog, 0.45, 0.8))
             patient = read_patient_info(folder)
             if vol[2] is None or ctb is None:
                 shift, score = (0, 0, 0), None  # pas de CT pour recaler : on garde l'alignement des grilles, sans recalage
             else:
                 self.cmp_message = "Recalage des deux séances…"
+                self.cmp_progress = 0.85
                 shift, score = estimate_shift(vol[2], ctb)
             shift = tuple(int(s) for s in shift)
             aligned = (shift_volume(suv, shift, vol[0].shape, 0.0),
@@ -437,6 +442,7 @@ class State:
             if self.vol is vol:  # la séance A n'a pas changé pendant le calcul
                 self.cmp = {"suv": aligned[0], "ctv": aligned[1], "patient": patient, "folder": folder, "shift": shift, "score": score}
                 self.cmp_status, self.cmp_message = "ready", ""
+        self.cmp_progress = None
 
     def open(self, folder):
         """Lance le chargement ; False si un chargement est déjà en cours."""
@@ -447,12 +453,15 @@ class State:
         threading.Thread(target=self._load, args=(folder,), daemon=True).start()
         return True
 
+    def _set_progress(self, f):
+        self.progress = f
+
     def _load(self, folder):
         try:
-            suv, spacing, origin = load_suv(folder)
-            series = ct_series(folder)
+            suv, spacing, origin = load_suv(folder, _scaled(self._set_progress, 0, 0.45))
+            series = ct_series(folder, _scaled(self._set_progress, 0.45, 0.6))
             uid = default_ct_uid(series, origin) if series else None
-            ctv = load_ct(folder, suv.shape, spacing, origin, uid, series)
+            ctv = load_ct(folder, suv.shape, spacing, origin, uid, series, _scaled(self._set_progress, 0.6, 1))
             patient = read_patient_info(folder)
         except SystemExit as e:  # `load_suv` signale « aucune série PET » par SystemExit : ne pas tuer le serveur
             self.status, self.message = "error", str(e)
@@ -531,7 +540,7 @@ def make_handler(state):
                     # relu à chaque requête : pas de redémarrage pour modifier la page
                     return self._send(Path(__file__).with_name("index.html").read_bytes(), "text/html; charset=utf-8")
                 if u.path == "/status":
-                    return self._json({"status": state.status, "message": state.message, "loaded": vol is not None})
+                    return self._json({"status": state.status, "message": state.message, "loaded": vol is not None, "progress": state.progress})
                 if u.path == "/open":
                     folder = q["folder"]
                     if not Path(folder).is_dir():
@@ -549,7 +558,7 @@ def make_handler(state):
                     return self._json({"started": state.open_compare(folder)})
                 if u.path == "/cstatus":
                     c, pa = state.cmp, (vol[3] if vol else {})
-                    return self._json({"status": state.cmp_status, "message": state.cmp_message, "ready": c is not None,
+                    return self._json({"status": state.cmp_status, "message": state.cmp_message, "ready": c is not None, "progress": state.cmp_progress,
                                        "date_a": pa.get("Date de l'examen"), "date_b": c["patient"].get("Date de l'examen") if c else None,
                                        "weight_a": pa.get("Poids"), "weight_b": c["patient"].get("Poids") if c else None,
                                        "shift_mm": [round(s * v, 1) for s, v in zip(c["shift"], vol[1])] if c and vol else None,

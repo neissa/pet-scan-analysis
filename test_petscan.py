@@ -70,3 +70,12 @@ def test_ct_choices_and_default_series():
     assert [c["uid"] for c in ch] == ["os", "std", "thorax"]  # le rapport de dose (1 image) est écarté
     assert ch[0]["couverture"] == 1.0 and ch[2]["couverture"] == 0.2
     assert default_ct_uid(series, origin) == "std"            # à couverture égale : noyau STANDARD
+
+
+def test_scan_reports_progress(tmp_path):
+    from petscan import _scaled, _scan
+    for i in range(60):
+        (tmp_path / f"f{i}").write_bytes(b"pas du dicom")
+    seen = []
+    assert _scan(tmp_path, "PT", _scaled(seen.append, 0.2, 0.6)) == {}
+    assert seen and seen == sorted(seen) and 0.2 <= seen[0] and seen[-1] < 0.6   # croissant, dans la plage demandée

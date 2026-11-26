@@ -18,12 +18,19 @@ def suv_factor(weight_kg, dose_bq, half_life_s, delay_s):
     return weight_kg * 1000 / (dose_bq * 2 ** (-delay_s / half_life_s))
 
 
-def _scan(folder, modality):
-    """{SeriesInstanceUID: [(chemin, en-tête)]} des séries d'une modalité DICOM (fichiers avec ou sans extension)."""
+def _scaled(progress, a, b):
+    """Rappel d'avancement ramené de [0, 1] à [a, b] (None reste None)."""
+    return None if progress is None else (lambda f: progress(a + (b - a) * f))
+
+
+def _scan(folder, modality, progress=None):
+    """{SeriesInstanceUID: [(chemin, en-tête)]} des séries d'une modalité DICOM (fichiers avec ou sans extension).
+    progress(f) : avancement de 0 à 1 (facultatif, pour l'interface)."""
     out = {}
-    for p in Path(folder).rglob("*"):
-        if not p.is_file():
-            continue
+    files = [p for p in Path(folder).rglob("*") if p.is_file()]
+    for k, p in enumerate(files):
+        if progress and k % 25 == 0:
+            progress(k / len(files))
         try:
             h = pydicom.dcmread(p, stop_before_pixels=True)
         except pydicom.errors.InvalidDicomError:
@@ -33,15 +40,20 @@ def _scan(folder, modality):
     return out
 
 
-def load_suv(folder):
-    """Retourne (volume SUV [z,y,x], espacement (z,y,x) en mm, origine (z de chaque coupe, y0, x0) en mm)."""
+def load_suv(folder, progress=None):
+    """Retourne (volume SUV [z,y,x], espacement (z,y,x) en mm, origine (z de chaque coupe, y0, x0) en mm).
+    progress(f) : avancement de 0 à 1 (facultatif)."""
     # Dossier de plusieurs séries : on garde la plus grande série PET (modalité DICOM "PT").
-    series = _scan(folder, "PT")
+    series = _scan(folder, "PT", _scaled(progress, 0, 0.4))
     if not series:
         raise SystemExit(f"Aucune série PET dans {folder}")
     paths = max(series.values(), key=len)
-    slices = sorted((pydicom.dcmread(p) for p, _ in paths),
-                    key=lambda s: float(s.ImagePositionPatient[2]))
+    read = []
+    for k, (p, _) in enumerate(paths):
+        read.append(pydicom.dcmread(p))
+        if progress and k % 10 == 0:
+            progress(0.4 + 0.5 * k / len(paths))
+    slices = sorted(read, key=lambda s: float(s.ImagePositionPatient[2]))
     s0 = slices[0]
     if s0.Units != "BQML":
         raise SystemExit(f"Unités {s0.Units} non gérées (BQML attendu)")
@@ -60,12 +72,14 @@ def load_suv(folder):
         raise SystemExit("Orientation non axiale non gérée")
     zs = np.array([float(s.ImagePositionPatient[2]) for s in slices])
     origin = (zs, float(s0.ImagePositionPatient[1]), float(s0.ImagePositionPatient[0]))
+    if progress:
+        progress(1.0)
     return vol * f, (abs(float(z)), float(s0.PixelSpacing[0]), float(s0.PixelSpacing[1])), origin
 
 
-def ct_series(folder):
+def ct_series(folder, progress=None):
     """{uid: [(chemin, en-tête)]} des séries CT avec position (écarte le rapport de dose et les captures)."""
-    return {u: hs for u, hs in _scan(folder, "CT").items() if "ImagePositionPatient" in hs[0][1]}
+    return {u: hs for u, hs in _scan(folder, "CT", progress).items() if "ImagePositionPatient" in hs[0][1]}
 
 
 def _ct_overlap(hs, zs):
@@ -87,7 +101,7 @@ def default_ct_uid(series, origin):
     return max(series, key=lambda u: (_ct_overlap(series[u], origin[0]), series[u][0][1].get("ConvolutionKernel") == "STANDARD"))
 
 
-def load_ct(folder, shape, spacing, origin, uid=None, series=None):
+def load_ct(folder, shape, spacing, origin, uid=None, series=None, progress=None):
     """CT (HU) rééchantillonné sur la grille du TEP [z,y,x] ; -1000 (air) hors du champ du CT.
     uid : série à utiliser (défaut : `default_ct_uid`) ; series : résultat de `ct_series` s'il est déjà scanné.
     Retourne None s'il n'y a pas de CT. Suppose des coupes axiales dans le même repère que le TEP."""
@@ -96,7 +110,12 @@ def load_ct(folder, shape, spacing, origin, uid=None, series=None):
     if not series:
         return None
     uid = uid if uid in series else default_ct_uid(series, origin)
-    cts = sorted((pydicom.dcmread(p) for p, _ in series[uid]), key=lambda s: float(s.ImagePositionPatient[2]))
+    read = []
+    for k, (p, _) in enumerate(series[uid]):
+        read.append(pydicom.dcmread(p))
+        if progress and k % 10 == 0:
+            progress(0.6 * k / len(series[uid]))
+    cts = sorted(read, key=lambda s: float(s.ImagePositionPatient[2]))
     if [round(v) for v in cts[0].ImageOrientationPatient] != [1, 0, 0, 0, 1, 0]:
         raise SystemExit("CT : orientation non axiale non gérée")
     vol = np.stack([(s.pixel_array * float(s.RescaleSlope) + float(s.RescaleIntercept)).astype(np.int16)
@@ -109,6 +128,8 @@ def load_ct(folder, shape, spacing, origin, uid=None, series=None):
               (x0 - float(cts[0].ImagePositionPatient[0])) / dx]
     out = np.full(shape, -1000, np.int16)
     for k, z in enumerate(zs):
+        if progress and k % 10 == 0:
+            progress(0.6 + 0.4 * k / len(zs))
         if not ct_z[0] <= z <= ct_z[-1]:
             continue
         f = np.interp(z, ct_z, np.arange(len(ct_z)))  # indice de coupe CT fractionnaire
