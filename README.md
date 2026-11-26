@@ -38,6 +38,21 @@ Molette sur une image = coupe suivante / précédente (Maj = ×10, angle ±10° 
 - **Export PDF** : les 3 coupes (avec mesures et, si activée, la surcouche d'organes), les infos patient et la liste des mesures. Le PDF contient l'identité du patient : ne le partagez pas sans précaution.
 - Le serveur n'écoute que sur 127.0.0.1 et refuse les requêtes dont l'hôte n'est pas local.
 
+## Application packagée (Windows)
+
+Une version sans installation de Python est publiée dans les *Releases* GitHub (`PetScan-win64.zip`) : décompresser, lancer `PetScan.exe`, la page s'ouvre dans le navigateur (fermer la fenêtre noire pour arrêter). Windows SmartScreen peut avertir au premier lancement (exécutable non signé).
+
+Construire soi-même (hors du dépôt : `build/`, `dist/` et `*.spec` sont ignorés par git, rien n'y est commité) :
+
+```
+pip install -e . pyinstaller
+python -m PyInstaller --noconfirm --clean --onedir --name PetScan --add-data "index.html;." viewer.py
+```
+
+Le résultat est le dossier `dist/PetScan/` (à garder entier). Pour l'archive de la release : `Compress-Archive -Path dist\PetScan -DestinationPath dist\PetScan-win64.zip`, puis `gh release create vX.Y.Z dist\PetScan-win64.zip`.
+
+Points propres au mode packagé (`sys.frozen`) : `multiprocessing.freeze_support()` pour les processus de lecture DICOM, le sélecteur de dossier relance l'exécutable avec `--browse`, et `index.html` est embarqué (`--add-data`). Le build est propre à l'OS et à l'architecture où il est lancé ; il faut le refaire après toute modification du code ou du front.
+
 ## Limites (à connaître)
 
 - Recherche / apprentissage uniquement, **pas un dispositif médical**.

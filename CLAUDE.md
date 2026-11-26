@@ -13,6 +13,7 @@ python viewer.py --demo              # volume synthétique, sans DICOM
 python petscan.py <dossier> --thr 2.5 --mip mip.png   # CLI : SUV + lésions
 pytest -q                            # tous les tests (~10 s, fantômes synthétiques, pas de DICOM)
 pytest -q test_viewer.py -k autoalign   # un seul test
+python -m PyInstaller --noconfirm --clean --onedir --name PetScan --add-data "index.html;." viewer.py   # app Windows dans dist/PetScan (voir README)
 ```
 
 Lancer depuis la racine : `viewer.py` relit `index.html` à chaque requête (recharger la page suffit pour le front), mais tout changement Python demande de relancer le serveur.

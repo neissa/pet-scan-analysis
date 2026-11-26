@@ -1,11 +1,13 @@
 """Visionneuse web TEP : python viewer.py [dossier_dicom]  (ou --demo)."""
 import argparse
+import multiprocessing
 import importlib.util
 import io
 import json
 import subprocess
 import sys
 import threading
+import webbrowser
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -285,13 +287,19 @@ def remember(folder):
         pass
 
 
+def _ask_folder():
+    import tkinter as tk
+    from tkinter import filedialog
+    r = tk.Tk(); r.withdraw(); r.attributes("-topmost", True)
+    print(filedialog.askdirectory(title="Dossier DICOM"))
+
+
 def browse():
-    """Sélecteur de dossier natif (tkinter, dans un sous-processus car il veut le thread principal) ; None si annulé."""
-    code = ("import tkinter as tk\nfrom tkinter import filedialog\n"
-            "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True)\n"
-            "print(filedialog.askdirectory(title='Dossier DICOM'))")
+    """Sélecteur de dossier natif (tkinter, dans un sous-processus car il veut le thread principal) ; None si annulé.
+    Le sous-processus relance ce programme avec --browse (application packagée : sys.executable est l'exécutable lui-même)."""
+    cmd = [sys.executable] + ([] if getattr(sys, "frozen", False) else [__file__]) + ["--browse"]
     try:
-        return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300).stdout.strip() or None
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=300).stdout.strip() or None
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -694,6 +702,8 @@ def make_handler(state):
 
 
 def main():
+    if "--browse" in sys.argv:
+        return _ask_folder()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("folder", nargs="?", help="dossier de la série PET DICOM (sinon, à choisir dans la page)")
     ap.add_argument("--demo", action="store_true", help="volume synthétique")
@@ -706,8 +716,11 @@ def main():
         state.open(a.folder)
     # 127.0.0.1 : données patient, jamais exposées au réseau
     print(f"http://127.0.0.1:{a.port}", flush=True)
+    if getattr(sys, "frozen", False):  # application packagée (double-clic) : on ouvre la page
+        webbrowser.open(f"http://127.0.0.1:{a.port}")
     ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(state)).serve_forever()
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()  # application packagée : les processus de lecture DICOM relancent l'exécutable
     main()

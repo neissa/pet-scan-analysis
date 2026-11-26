@@ -5,3 +5,7 @@ __pycache__/
 *.dcm
 *.png
 *.pdf
+
+build/
+dist/
+*.spec
