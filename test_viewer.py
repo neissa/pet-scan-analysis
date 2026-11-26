@@ -222,5 +222,6 @@ def test_autoalign_route_global_local_and_errors():
         again = json.loads(_get(srv, "/autoalign?scope=local&c=40,45,45&ob=2,-4,6")[1])
         assert again["e"] == [0, 0, 0] and again["ob"] == [2, -4, 6]
         assert _get(srv, "/autoalign?scope=local&c=1,2")[0] == 400                          # centre mal formé
+        assert _get(srv, "/autoalign?scope=local&c=500,45,45")[0] == 200                    # coupe > 400 : un centre n'est pas un décalage
     finally:
         srv.shutdown()

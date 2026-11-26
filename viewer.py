@@ -482,10 +482,10 @@ def make_handler(state):
             return (None if _angle(int(q["i"])) == 0 else False), spacing
 
         @staticmethod
-        def _off(q, key):
+        def _off(q, key, lim=400):
             """Décalage manuel (dz, dy, dx) en voxels, passé sous la forme « z,y,x » ; ValueError si invalide (réponse 400)."""
             v = tuple(int(c) for c in q.get(key, "0,0,0").split(","))
-            if len(v) != 3 or any(abs(c) > 400 for c in v):
+            if len(v) != 3 or any(abs(c) > lim for c in v):
                 raise ValueError("décalage invalide")
             return v
 
@@ -554,7 +554,7 @@ def make_handler(state):
                         return self._json({"error": "L'alignement automatique demande le CT des deux séances."})
                     da, db = self._off(q, "oa"), self._off(q, "ob")
                     if q.get("scope") == "local":
-                        c = self._off(q, "c")
+                        c = tuple(min(max(v, 0), n - 1) for v, n in zip(self._off(q, "c", 100_000), suv.shape))  # indices de coupes, ramenés dans le volume
                         e, score = refine_shift(ctv, cb["ctv"], da, db, c, tuple(max(8, round(70 / s)) for s in spacing), step=1, margin=14)
                     else:
                         e, score = refine_shift(ctv, cb["ctv"], da, db, step=3, margin=10)

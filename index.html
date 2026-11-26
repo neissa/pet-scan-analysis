@@ -95,6 +95,7 @@
   #cmpseg span { min-width: 58px; padding: 0 6px; }
   details.subsec { margin-top: 8px; } details.subsec > summary { cursor: pointer; min-height: 28px; display: flex; align-items: center; color: var(--label-2); }
   td.up { color: #ff6961; } td.down { color: #64b5ff; }   /* évolution d'une lésion : hausse / baisse */
+  th[data-k] { cursor: pointer; user-select: none; white-space: nowrap; } th[data-k]:hover { color: var(--label); }
   tr.les { cursor: pointer; }
   tr.les:hover td, tr.les:focus-visible td { background: var(--surface-2); }
   #patientgrid { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0 0; }
@@ -435,17 +436,43 @@ async function lesions() {
   if (my !== lesTok) return;
   $("tbl").style.opacity = 1;
   lesionList = r;
+  lesionList.forEach((l, i) => l.n = i + 1);  // « # » = rang par SUVmax décroissant, conservé quel que soit le tri
+  renderLesions();
+}
+
+// Tri par colonne : clic sur l'en-tête (ou Entrée) ; un 2e clic inverse. Les valeurs manquantes (Δ % sans B) restent toujours en bas.
+const LES_COLS = [["n", "#"], ["suv_max", "SUVmax"], ["suv_mean", "SUVmean"], ["mtv_ml", "MTV ml"], ["tlg", "TLG"],
+                  ["suv_b", "SUVmax B"], ["delta_pct", "Δ %"]];
+let lesSort = { key: "n", dir: 1 };  // dir : 1 croissant, -1 décroissant ; le tri est conservé quand le seuil ou les décalages changent
+function sortBy(k) {
+  lesSort = lesSort.key === k ? { key: k, dir: -lesSort.dir } : { key: k, dir: k === "n" ? 1 : -1 };  // 1er clic : le plus grand d'abord (sauf #)
+  renderLesions();
+}
+function renderLesions() {
   const cc = lesionList.length && lesionList[0].suv_b !== undefined;  // séance B chargée : colonnes d'évolution
+  const cols = LES_COLS.filter(([k]) => cc || (k !== "suv_b" && k !== "delta_pct"));
+  if (!cols.some(([k]) => k === lesSort.key)) lesSort = { key: "n", dir: 1 };  // colonne B disparue : tri par défaut
+  const { key, dir } = lesSort;
+  const rows = [...lesionList].sort((a, b) => {
+    const x = a[key], y = b[key];
+    if (x == null || y == null) return (x == null) - (y == null);
+    return (x - y) * dir || a.n - b.n;
+  });
   const evo = l => {  // variation de SUVmax de B vers A, en rouge si hausse > 25 %, en bleu si baisse > 25 %
     if (l.delta_pct == null) return `<td>—</td>`;
     return `<td class="${l.delta_pct > 25 ? "up" : l.delta_pct < -25 ? "down" : ""}">${l.delta_pct > 0 ? "+" : ""}${l.delta_pct.toFixed(0)}</td>`;
   };
-  $("tbl").innerHTML = "<tr><th>#</th><th>SUVmax</th><th>SUVmean</th><th>MTV ml</th><th>TLG</th>" + (cc ? "<th>SUVmax B</th><th>Δ %</th>" : "") + "</tr>" +
-    lesionList.map((l, i) => `<tr class="les" data-i="${i}" tabindex="0" title="Aller à cette lésion"><td>${i + 1}</td><td>${l.suv_max.toFixed(2)}</td>` +
+  $("tbl").innerHTML = "<tr>" + cols.map(([k, t]) => `<th data-k="${k}" tabindex="0" role="button" title="Trier par cette colonne" ` +
+      `aria-sort="${k === key ? (dir > 0 ? "ascending" : "descending") : "none"}">${t}${k === key ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") + "</tr>" +
+    rows.map((l, i) => `<tr class="les" data-i="${i}" tabindex="0" title="Aller à cette lésion"><td>${l.n}</td><td>${l.suv_max.toFixed(2)}</td>` +
       `<td>${l.suv_mean.toFixed(2)}</td><td>${l.mtv_ml.toFixed(1)}</td><td>${l.tlg.toFixed(1)}</td>` +
       (cc ? `<td>${l.suv_b.toFixed(2)}</td>${evo(l)}` : "") + `</tr>`).join("");
+  for (const th of $("tbl").querySelectorAll("th[data-k]")) {
+    th.onclick = () => sortBy(th.dataset.k);
+    th.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); th.onclick(); } };
+  }
   for (const tr of $("tbl").querySelectorAll("tr.les")) {
-    tr.onclick = () => gotoLesion(lesionList[tr.dataset.i]);
+    tr.onclick = () => gotoLesion(rows[tr.dataset.i]);
     tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(); } };
   }
 }
