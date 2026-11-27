@@ -4,6 +4,7 @@ import multiprocessing
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -29,7 +30,7 @@ from petscan import (_scaled, analyze, ct_choices, ct_series, default_ct_uid, lo
                      measure_tolerance)
 
 AXIS = {"axial": 0, "coronal": 1, "sagittal": 2}
-CONFIG = Path.home() / ".pet-scan-analysis.json"  # dossiers récents, dans le dossier utilisateur (jamais dans le repo)
+CONFIG = Path(os.environ.get("PETSCAN_CONFIG") or Path.home() / ".pet-scan-analysis.json")  # PETSCAN_CONFIG : appli Android ; dossiers récents, dans le dossier utilisateur (jamais dans le repo)
 BROWSE = importlib.util.find_spec("tkinter") is not None  # sélecteur de dossier natif disponible ?
 
 
@@ -549,7 +550,7 @@ def make_handler(state):
             try:
                 if u.path == "/":
                     # relu à chaque requête : pas de redémarrage pour modifier la page
-                    return self._send(Path(__file__).with_name("index.html").read_bytes(), "text/html; charset=utf-8")
+                    return self._send(Path(os.environ.get("PETSCAN_INDEX") or Path(__file__).with_name("index.html")).read_bytes(), "text/html; charset=utf-8")
                 if u.path == "/status":
                     return self._json({"status": state.status, "message": state.message, "loaded": vol is not None, "progress": state.progress})
                 if u.path == "/open":

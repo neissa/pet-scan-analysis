@@ -1,6 +1,7 @@
 """TEP (PET) injecté : série DICOM -> volume SUV -> statistiques par lésion."""
 import argparse
 import os
+import sys
 from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
 from pathlib import Path
 
@@ -28,6 +29,8 @@ def _scaled(progress, a, b):
 def n_workers():
     """Processus de lecture en parallèle, d'après la machine : ses cœurs utilisables moins un (pour le serveur et la page),
     au plus 8 (au-delà, le démarrage des processus coûte plus que le gain) ; 1 = lecture séquentielle."""
+    if hasattr(sys, "getandroidapilevel") or "ANDROID_DATA" in os.environ:
+        return 1  # Android : pas de processus fils dans l'appli, lecture séquentielle
     try:
         n = len(os.sched_getaffinity(0))  # cœurs réellement alloués au processus (Linux)
     except AttributeError:

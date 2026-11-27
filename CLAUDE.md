@@ -14,6 +14,7 @@ python petscan.py <dossier> --thr 2.5 --mip mip.png   # CLI : SUV + lésions
 pytest -q                            # tous les tests (~10 s, fantômes synthétiques, pas de DICOM)
 pytest -q test_viewer.py -k autoalign   # un seul test
 python -m PyInstaller --noconfirm --clean --onedir --name PetScan --add-data "index.html;." viewer.py   # app Windows dans dist/PetScan (voir README)
+cd android; $env:JAVA_HOME="<JDK 17/21>"; .\gradlew.bat assembleDebug   # APK Android (Chaquopy, Python 3.10) : android/app/build/outputs/apk/debug (voir README)
 ```
 
 Lancer depuis la racine : `viewer.py` relit `index.html` à chaque requête (recharger la page suffit pour le front), mais tout changement Python demande de relancer le serveur.
@@ -32,6 +33,7 @@ Lancer depuis la racine : `viewer.py` relit `index.html` à chaque requête (rec
 - Axes des volumes : `(z, y, x)` partout ; espacement `(z, y, x)` en mm.
 - Décalages manuels : `out[z,y,x] = vol[z+dz, y+dy, x+dx]` côté serveur ; la valeur affichée dans l'UI est l'opposé (`-d`). Les index de coupe passés en `c=` sont des indices, pas des décalages (`_off(q, key, lim)`).
 - Sécurité (données patient) : écoute sur 127.0.0.1 uniquement, contrôle de l'en-tête `Host` (anti DNS-rebinding), `Sec-Fetch-Site` exigé sur les routes qui changent l'état, `Cache-Control: no-store`, pas de journal des requêtes. Une erreur non gérée dans `do_GET` renvoie du HTML (`send_error`), que le front ne sait pas lire comme du JSON : préférer `_json({"error": …})`.
+- APK Android : le code Python doit rester compatible Python 3.10, numpy 1.23, scipy 1.8.1, matplotlib 3.6 (versions fournies par Chaquopy).
 - Ne jamais committer de DICOM, PNG ni PDF (`.gitignore`) ni de chemins ou identités réels dans les tests ou messages de commit ; les tests utilisent des fantômes synthétiques.
 
 ## Routeur de travail (modèles et agents)

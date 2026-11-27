@@ -53,6 +53,51 @@ Le résultat est le dossier `dist/PetScan/` (à garder entier). Pour l'archive d
 
 Points propres au mode packagé (`sys.frozen`) : `multiprocessing.freeze_support()` pour les processus de lecture DICOM, le sélecteur de dossier relance l'exécutable avec `--browse`, et `index.html` est embarqué (`--add-data`). Le build est propre à l'OS et à l'architecture où il est lancé ; il faut le refaire après toute modification du code ou du front.
 
+## Application Android (APK, tablette)
+
+Le dossier `android/` est un projet Gradle qui embarque le serveur Python tel quel ([Chaquopy](https://chaquo.com/chaquopy/)) et affiche la page dans une WebView plein écran sur `http://127.0.0.1:8000` (écoute locale uniquement, mêmes contrôles `Host` / `Sec-Fetch-Site` que sur le poste). Les `.py` de la racine (sans les tests) et `index.html` sont recopiés à chaque build : rien n'est dupliqué dans git.
+
+Versions retenues : Chaquopy 17.2, Android Gradle Plugin 8.13, Gradle 8.13 (wrapper commité), **Python 3.10 embarqué** (seule version pour laquelle le dépôt Chaquopy fournit scipy : 1.8.1, avec numpy 1.23, matplotlib 3.6, pillow 11), ABI `arm64-v8a` (tablettes) et `x86_64` (émulateur), Android 8.0+ (minSdk 26).
+
+Prérequis pour construire :
+
+- JDK 17 ou 21 (pas le JDK 25 d'Android Studio : Gradle 8.13 ne le prend pas en charge), par exemple Temurin 21 ;
+- SDK Android (platform 36, build-tools 36.0.0), et un Python 3.10 sur le poste (Chaquopy s'en sert pour pip et la compilation) ;
+- `android/local.properties` (non commité) :
+
+```
+sdk.dir=C:/Users/<vous>/AppData/Local/Android/Sdk
+buildPython=C:/chemin/vers/python3.10/python.exe   # facultatif si « py -3.10 » fonctionne
+```
+
+Construire et installer (PowerShell) :
+
+```
+$env:JAVA_HOME = "C:\chemin\vers\jdk-21"
+cd android
+.\gradlew.bat assembleDebug
+adb install -r app\build\outputs\apk\debug\app-debug.apk
+```
+
+L'APK (≈ 100 Mo, non commité) est `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+Utilisation sur la tablette :
+
+- au premier lancement, l'appli demande **l'accès à tous les fichiers** (Android 11+ : écran système « Accès à tous les fichiers », à activer). C'est nécessaire parce que le serveur Python lit les DICOM par leur chemin (`/storage/emulated/0/...`) ; l'accès par URI « document » d'Android n'est pas lisible par pydicom. Les données ne quittent pas la tablette ;
+- copier l'examen dans un dossier de la galerie (ex. `Pictures/<examen>` ou `DCIM/<examen>`) ; les séries peuvent être dans des sous-dossiers (lecture récursive) ;
+- le bouton flottant **« Dossier »** (en bas à droite) ouvre le sélecteur Android (départ dans `Pictures`), convertit le dossier choisi en chemin réel (`primary:Pictures/x` → `/storage/emulated/0/Pictures/x` ; carte SD `ABCD-1234:x` → `/storage/ABCD-1234/x`), le met dans le champ « dossier » de la page et l'ouvre. On peut aussi saisir le chemin à la main ; le bouton « Parcourir » (tkinter) n'existe pas sur Android ;
+- le bouton retour revient en arrière dans la page, puis ferme l'appli.
+
+Limites de l'APK :
+
+- mémoire : un examen réel (TEP 420×384×384 en float32 ≈ 250 Mo, plus le CT) demande une tablette bien dotée en RAM (`largeHeap` est activé, mais Python alloue hors du tas Java) ; la résolution n'est pas réduite ;
+- lecture DICOM séquentielle (pas de processus parallèles sur Android), donc plus lente que sur le poste ;
+- l'interface est celle du poste (souris, molette) : pas de gestes tactiles dédiés (molette, pincement) ;
+- « Exporter PDF » télécharge un blob, et l'appli ne gère pas les téléchargements de la WebView : export PDF a priori indisponible dans l'APK (non testé) ;
+- APK de debug seulement, pas de signature release ; le chemin d'une carte SD n'a pas été testé.
+
+Test sur émulateur sans données réelles : générer une petite série TEP synthétique avec pydicom (fantôme du mode `--demo`), `adb push <dossier> /sdcard/Pictures/test_dicom`, puis « Dossier » → `test_dicom`.
+
 ## Limites (à connaître)
 
 - Recherche / apprentissage uniquement, **pas un dispositif médical**.

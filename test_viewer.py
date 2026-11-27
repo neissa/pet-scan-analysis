@@ -274,3 +274,21 @@ def test_progress_resets_on_open_and_after_load(tmp_path):
             break
         time.sleep(0.05)
     assert state.status == "error" and state.progress is None
+
+
+def test_android_env_index_and_config(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    import sys
+    page = tmp_path / "index.html"
+    page.write_bytes(b"<p>page android</p>")
+    monkeypatch.setenv("PETSCAN_INDEX", str(page))
+    srv = _server(State())
+    try:
+        assert _get(srv, "/") == (200, b"<p>page android</p>")  # PETSCAN_INDEX prioritaire
+    finally:
+        srv.shutdown()
+    cfg = tmp_path / "cfg.json"  # PETSCAN_CONFIG : lu à l'import, d'où un processus à part
+    out = subprocess.run([sys.executable, "-c", "import viewer; viewer.remember('/d'); print(viewer.recent())"],
+                         env={**os.environ, "PETSCAN_CONFIG": str(cfg)}, capture_output=True, text=True)
+    assert out.stdout.strip() == "['/d']" and cfg.exists()

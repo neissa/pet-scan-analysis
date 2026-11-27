@@ -79,3 +79,9 @@ def test_scan_reports_progress(tmp_path):
     seen = []
     assert _scan(tmp_path, "PT", _scaled(seen.append, 0.2, 0.6)) == {}
     assert seen and seen == sorted(seen) and 0.2 <= seen[0] and seen[-1] < 0.6   # croissant, dans la plage demandée
+
+
+def test_n_workers_sequential_on_android(monkeypatch):
+    from petscan import n_workers
+    monkeypatch.setenv("ANDROID_DATA", "/data")  # présent dans l'environnement de toute appli Android
+    assert n_workers() == 1
