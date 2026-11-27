@@ -1,15 +1,22 @@
 <!doctype html>
 <html lang="fr">
 <meta charset="utf-8">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="dark light">
 <title>Visionneuse TEP</title>
 <style>
-  /* Jetons (thème sombre permanent : l'interface s'efface devant l'image) */
+  /* Jetons : sombre par défaut (l'interface s'efface devant l'image) ; clair ou « système » au choix (Affichage > Thème), posé par data-theme */
   :root {
     --bg: #1c1c1e; --surface: #2c2c2e; --surface-2: #3a3a3c; --line: #48484a;
     --label: #f5f5f7; --label-2: #aeaeb2; --label-3: #8e8e93;   /* 15:1, 7.7:1, 5.2:1 sur --bg */
     --accent: #0b63ce; --accent-text: #64b5ff; --warn: #ff9f0a; --focus: #64b5ff;
+    --hover: #48484a; --toast: rgba(44,44,46,.96); --res: #ffd60a; --up: #ff6961; --down: #64b5ff; color-scheme: dark;
     --font: -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  :root[data-theme=light] {
+    --bg: #f2f2f7; --surface: #ffffff; --surface-2: #e5e5ea; --line: #c7c7cc;
+    --label: #1c1c1e; --label-2: #48484a; --label-3: #636366;   /* 16:1, 8:1, 5:1 sur --bg */
+    --accent: #0b63ce; --accent-text: #0a5fc2; --warn: #a85400; --focus: #0a64d0;
+    --hover: #d1d1d6; --toast: rgba(255,255,255,.97); --res: #8a5a00; --up: #c0201a; --down: #0a5fc2; color-scheme: light;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -26,7 +33,7 @@
   .tb-trail { justify-content: flex-end; flex: 0 1 auto; }
   /* Toast : message de chargement ou d'erreur, en bas au centre, sans décaler la page */
   #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 20; display: flex; flex-direction: column; gap: 8px;
-           min-width: 240px; max-width: min(90vw, 560px); padding: 10px 16px; border-radius: 12px; background: rgba(44,44,46,.96); border: 1px solid var(--line);
+           min-width: 240px; max-width: min(90vw, 560px); padding: 10px 16px; border-radius: 12px; background: var(--toast); border: 1px solid var(--line);
            box-shadow: 0 8px 24px rgba(0,0,0,.5); color: var(--label); }
   #toast .bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
   #toast .bar i { display: block; height: 100%; width: 0; background: var(--focus); border-radius: 3px; transition: width .25s ease-out; }
@@ -51,7 +58,7 @@
   button { cursor: pointer; }
   button[aria-pressed=true] { background: var(--accent); color: #fff; border-color: var(--accent); }
   button.step { min-width: 40px; min-height: 40px; margin-left: 4px; padding: 0; font-size: 20px; line-height: 1; touch-action: manipulation; }
-  button:hover:not(:disabled) { background: #48484a; }
+  button:hover:not(:disabled) { background: var(--hover); }
   button:disabled { opacity: .5; cursor: default; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }   /* blanc sur --accent : 6:1 */
   button.primary:hover:not(:disabled) { background: #1a73e0; }
@@ -89,10 +96,10 @@
   .miptools { grid-column: 2 / -1; display: flex; align-items: center; gap: 16px; }
   .hint { color: var(--label-3); font-size: 12px; margin: 0; }
   figure { position: relative; margin: 0; flex: 0 0 auto; }
-  figcaption { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 1px 8px; border-radius: 6px; font-size: 12px; color: var(--label-2);
+  figcaption { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 1px 8px; border-radius: 6px; font-size: 12px; color: #aeaeb2;
                background: rgba(28,28,30,.72); backdrop-filter: blur(8px); text-transform: capitalize; pointer-events: none; }
   figure.mix figcaption { top: 30px; }
-  figcaption b { color: var(--label); font-variant-numeric: tabular-nums; }
+  figcaption b { color: #f5f5f7; font-variant-numeric: tabular-nums; }
   .wrap { position: relative; line-height: 0; width: fit-content; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
   .wrap img { display: block; height: var(--vh); width: auto; background: #000; cursor: crosshair;
               -webkit-user-drag: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: pan-y; }
@@ -119,7 +126,7 @@
   .cbar img { display: block; width: 100%; height: 12px; border-radius: 3px; }
   .cbar div { display: flex; justify-content: space-between; color: var(--label-3); font-size: 12px; font-variant-numeric: tabular-nums; }
   #glob { display: block; margin-top: 8px; color: var(--label-2); }
-  #res { margin-top: 8px; color: #ffd60a; white-space: pre-line; font-size: 12px; min-height: 1.4em; font-variant-numeric: tabular-nums; }
+  #res { margin-top: 8px; color: var(--res); white-space: pre-line; font-size: 12px; min-height: 1.4em; font-variant-numeric: tabular-nums; }
   .warn { color: var(--warn); font-size: 12px; margin: 4px 0; }
   .note { color: var(--label-3); font-size: 12px; margin: 16px 0 0; }
 
@@ -128,14 +135,14 @@
   th { color: var(--label-2); }
   td:first-child, th:first-child, td.loc, th.loc { text-align: left; }
   details.subsec { margin-top: 8px; } details.subsec > summary { cursor: pointer; min-height: 28px; display: flex; align-items: center; color: var(--label-2); }
-  td.up { color: #ff6961; } td.down { color: #64b5ff; }   /* évolution d'un point de fixation : hausse / baisse */
+  td.up { color: var(--up); } td.down { color: var(--down); }   /* évolution d'un point de fixation : hausse / baisse */
   th[data-k] { cursor: pointer; user-select: none; white-space: nowrap; } th[data-k]:hover { color: var(--label); }
   tr.les { cursor: pointer; }
   tr.les:hover td, tr.les:focus-visible td { background: var(--surface-2); }
   #patientgrid { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0 0; }
   #patientgrid dt { color: var(--label-3); } #patientgrid dd { margin: 0; overflow-wrap: anywhere; }
 
-  #tip { position: fixed; z-index: 11; pointer-events: none; padding: 2px 8px; border-radius: 6px; font-weight: 600;
+  #tip { position: fixed; z-index: 11; pointer-events: none; padding: 2px 8px; border-radius: 6px; font-weight: 600; color: #f5f5f7;
          background: rgba(28,28,30,.9); border: 1px solid var(--line); }
   #loupe { position: fixed; z-index: 10; width: 160px; height: 160px; pointer-events: none;
            border: 2px solid #fff; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.6); }
@@ -197,6 +204,8 @@
   <aside class="inspector" id="inspector" aria-label="Réglages et résultats">
     <details class="sec" open>
       <summary>Affichage</summary>
+      <label class="row"><span>Thème</span>
+        <select id="theme"><option value="system">Identique au système</option><option value="light">Clair</option><option value="dark">Sombre</option></select></label>
       <div id="fz">
         <!-- le mode d'affichage (fusion / TEP / CT) se déduit des couches cochées ; le select reste l'état lu par le reste de la page -->
         <select id="mode" hidden aria-hidden="true"><option value="fusion"></option><option value="pet"></option><option value="ct"></option></select>
@@ -684,6 +693,7 @@ async function start() {
 async function loadPatient() {
   const p = await (await fetch("/patient")).json();
   window.patientInfo = p;
+  sessDate.a = fmtDate(p["Date de l'examen"]); showDates();
   const keys = Object.keys(p);
   $("patient").hidden = !keys.length;
   $("patient").open = false;
@@ -705,12 +715,18 @@ function layout() {
 }
 
 const ROWNAME = { a: "A", b: "B", m: "Mix" };
+// Date de chaque lot d'images dans les légendes : JJ/MM, avec l'année (JJ/MM/AAAA) si ce n'est pas l'année en cours. Entrée : « JJ/MM/AAAA » du DICOM.
+const fmtDate = d => { const m = /^(\d\d)\/(\d\d)\/(\d{4})$/.exec(d || ""); return !m ? "" : +m[3] === new Date().getFullYear() ? `${m[1]}/${m[2]}` : d; };
+const sessDate = { a: "", b: "" };
+function showDates() {
+  for (const e of document.querySelectorAll("[data-rd]")) e.textContent = ROWNAME[e.dataset.rd] + (sessDate[e.dataset.rd] ? " " + sessDate[e.dataset.rd] : "");
+}
 const SPLITBAR = `<div class="splitbar"><div class="knob" role="slider" tabindex="0" aria-label="Séparation A | B" ` +
                  `aria-valuemin="0" aria-valuemax="100"></div></div>`;
 // Une image (vue v, ligne r) ; la ligne mix porte la poignée de séparation A | B au-dessus de l'image.
 const fig = (v, r) => `<figure class="${r === "m" ? "mix " : ""}${r === "a" ? "" : "cmponly"}"${r === "a" ? "" : " hidden"}>` +
   (r === "m" ? SPLITBAR : "") +
-  `<figcaption><span${r === "m" ? ' data-rn="m"' : ""}>${ROWNAME[r]}</span> · ${v} ` +
+  `<figcaption><span${r === "m" ? ' data-rn="m"' : ` data-rd="${r}"`}>${ROWNAME[r]}</span> · ${v} ` +
   (v === "mip" && r !== "a" ? "<b>de face</b>" : `<b data-n="${v}"${r === "a" ? ` id="n-${v}"` : ""}></b>`) + `</figcaption>` +
   `<div class="wrap"><img id="img-${key(v, r)}" alt="${v} ${ROWNAME[r]}"><canvas id="cv-${key(v, r)}"></canvas></div>` +
   (v === "mip" && r === "a" ? `<input type="range" id="s-mip" aria-label="Angle du MIP">` : "") + `</figure>`;
@@ -989,6 +1005,7 @@ async function watchCompare() {
     if (s.status === "loading") { toast(s.message, true, s.progress); await new Promise(r => setTimeout(r, 700)); continue; }
     toast(s.status === "error" ? s.message : "");
     setCmpReady(!!s.ready);
+    sessDate.b = s.ready ? fmtDate(s.date_b) : ""; showDates();
     if (s.ready) {
       const mm = (s.shift_mm || []).map(v => String(v).replace(".", ",")).join(" ; ");
       $("cinfo").textContent = `A : ${s.date_a || "?"}${s.weight_a ? " (" + s.weight_a + ")" : ""} · B : ${s.date_b || "?"}${s.weight_b ? " (" + s.weight_b + ")" : ""}. ` +
@@ -1120,6 +1137,16 @@ $("ctlayers").onchange = async () => {
   syncMode();
 };
 $("favonly").onchange = $("volmin").oninput = renderLesions;
+// Thème : clair, sombre ou identique au système (suit le changement du système en direct) ; mémorisé dans le navigateur
+const lightQ = matchMedia("(prefers-color-scheme: light)");
+function applyTheme() {
+  const p = localStorage.getItem("theme") || "system";
+  $("theme").value = p;
+  document.documentElement.dataset.theme = p === "system" ? (lightQ.matches ? "light" : "dark") : p;
+}
+$("theme").onchange = () => { localStorage.setItem("theme", $("theme").value); applyTheme(); };
+lightQ.addEventListener("change", applyTheme);
+applyTheme();
 // Boutons − / + des champs numériques (seuil, volume mini) : un pas par appui, répétition en maintenant ; sans clavier
 for (const b of document.querySelectorAll("button.step")) {
   const inp = $(b.dataset.for), go = () => {
