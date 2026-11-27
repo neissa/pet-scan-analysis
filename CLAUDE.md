@@ -13,7 +13,7 @@ python viewer.py --demo              # volume synthétique, sans DICOM
 python petscan.py <dossier> --thr 2.5 --mip mip.png   # CLI : SUV + lésions
 pytest -q                            # tous les tests (~10 s, fantômes synthétiques, pas de DICOM)
 pytest -q test_viewer.py -k autoalign   # un seul test
-python -m PyInstaller --noconfirm --clean --onedir --name PetScan --add-data "index.html;." viewer.py   # app Windows dans dist/PetScan (voir README)
+python -m PyInstaller --noconfirm --clean --onedir --name PetScan --icon assets/netscan.ico --add-data "index.html;." viewer.py   # app Windows dans dist/PetScan (voir README)
 cd android; $env:JAVA_HOME="<JDK 17/21>"; .\gradlew.bat assembleDebug   # APK Android (Chaquopy, Python 3.10) : android/app/build/outputs/apk/debug (voir README)
 ```
 
@@ -34,7 +34,7 @@ Lancer depuis la racine : `viewer.py` relit `index.html` à chaque requête (rec
 - Décalages manuels : `out[z,y,x] = vol[z+dz, y+dy, x+dx]` côté serveur ; la valeur affichée dans l'UI est l'opposé (`-d`). Les index de coupe passés en `c=` sont des indices, pas des décalages (`_off(q, key, lim)`).
 - Sécurité (données patient) : écoute sur 127.0.0.1 uniquement, contrôle de l'en-tête `Host` (anti DNS-rebinding), `Sec-Fetch-Site` exigé sur les routes qui changent l'état, `Cache-Control: no-store`, pas de journal des requêtes. Une erreur non gérée dans `do_GET` renvoie du HTML (`send_error`), que le front ne sait pas lire comme du JSON : préférer `_json({"error": …})`.
 - APK Android : le code Python doit rester compatible Python 3.10, numpy 1.23, scipy 1.8.1, matplotlib 3.6 (versions fournies par Chaquopy).
-- Ne jamais committer de DICOM, PNG ni PDF (`.gitignore`) ni de chemins ou identités réels dans les tests ou messages de commit ; les tests utilisent des fantômes synthétiques.
+- Ne jamais committer de DICOM, PNG ni PDF (`.gitignore`), sauf les icônes de la marque (`assets/`, `android/app/src/main/res/`), ni de chemins ou identités réels dans les tests ou messages de commit ; les tests utilisent des fantômes synthétiques.
 
 ## Routeur de travail (modèles et agents)
 
@@ -47,5 +47,5 @@ Lancer depuis la racine : `viewer.py` relit `index.html` à chaque requête (rec
   3. **Coder** le minimum nécessaire.
   4. **Tester** (`pytest -q`, et vérification dans le navigateur pour le front).
   5. **Recommencer** si l'objectif n'est pas atteint ; compter les échecs pour déclencher l'escalade.
-- **Worktrees** : `isolation: "worktree"` fonctionne depuis `C:\Users\A\git\pet-scan-analysis` (worktrees créés dans `.claude/worktrees/agent-*`, branche `worktree-agent-*`). Il échouait quand le dépôt était dans un chemin trop long (`'$GIT_DIR' too big`) : garder le dépôt à un chemin court ; à défaut, `git worktree add -b <branche> C:/wt/<nom>` et un brief avec ce chemin absolu. L'agent commite sans pousser.
+- **Worktrees** : `isolation: "worktree"` fonctionne depuis un dépôt à chemin court, par ex. `C:\git\pet-scan-analysis` (worktrees créés dans `.claude/worktrees/agent-*`, branche `worktree-agent-*`). Il échouait quand le dépôt était dans un chemin trop long (`'$GIT_DIR' too big`) : garder le dépôt à un chemin court ; à défaut, `git worktree add -b <branche> C:/wt/<nom>` et un brief avec ce chemin absolu. L'agent commite sans pousser.
 - **Ménage obligatoire** une fois le travail d'un worktree fini et repris (merge ou cherry-pick) : vérifier le commit de l'agent, puis `git worktree remove <chemin>`, `git branch -D <branche>` (y compris les `worktree-agent-*` orphelines), `git worktree prune`, et contrôler avec `git worktree list` et `git branch`.

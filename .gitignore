@@ -16,3 +16,7 @@ android/build/
 android/app/build/
 android/local.properties
 *.apk
+
+# ressources graphiques de la marque (pas des données patient)
+!assets/*.png
+!android/app/src/main/res/**/*.png
