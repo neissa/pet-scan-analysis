@@ -26,7 +26,7 @@ Molette sur une image = coupe suivante / précédente (Maj = ×10, angle ±10° 
 
 ### Fonctions de la visionneuse
 
-- **Dossier** : `python viewer.py` sans argument, puis champ de chemin, « Parcourir… » (sélecteur natif, tkinter) et dossiers récents (`~/.pet-scan-analysis.json`, hors repo). Le chargement se fait en arrière-plan ; une erreur laisse l'ancien volume affiché.
+- **Dossier** : `python viewer.py` sans argument, puis un clic dans le champ de la séance A (ou B) ouvre le sélecteur de dossier natif (tkinter ; sinon saisir le chemin), et le bouton « Charger » valide un chemin saisi ; dossiers récents dans `~/.pet-scan-analysis.json`, hors repo. Le chargement se fait en arrière-plan ; une erreur laisse l'ancien volume affiché.
 - **Vues** : une ligne axial / coronal / sagittal par séance (A ; avec une séance B : lignes A, B et « Mix » A | B ou différence A − B), toutes de même hauteur et remplissant la largeur ; coupes, zoom, repères et mesures synchronisés entre les lignes. Curseur vertical de zoom à gauche de chaque ligne (centré sur le point courant), Ctrl + molette = zoom centré sur la souris, molette = coupes, molette sur tous les curseurs (Maj = ×10), fusion TEP + CT. La roue crantée (à côté d'« Exporter PDF ») masque ou affiche le panneau de réglages.
 - **Outils** (barre sous les dossiers, avec « Réinitialiser le zoom » ; région % et TEP/CT apparaissent avec la mesure auto) : règle en temps réel, semi-transparente (barres aux extrémités), mesure auto sur le TEP (région ≥ X % du max local) ou sur le CT (± tolérance en HU), recalculées en direct quand le curseur bouge, loupe ×4 à viseur creux.
 - **Série CT** : si le dossier en contient plusieurs (ex. OS MAR, STANDARD MAR, THORAX APNEE), un menu « Série CT » permet de changer ; seul le CT est rechargé (quelques secondes), la coupe courante est conservée. Les séries qui ne couvrent qu'une partie du TEP sont signalées « partiel ».
@@ -85,7 +85,8 @@ Utilisation sur la tablette :
 
 - au premier lancement, l'appli demande **l'accès à tous les fichiers** (Android 11+ : écran système « Accès à tous les fichiers », à activer). C'est nécessaire parce que le serveur Python lit les DICOM par leur chemin (`/storage/emulated/0/...`) ; l'accès par URI « document » d'Android n'est pas lisible par pydicom. Les données ne quittent pas la tablette ;
 - copier l'examen dans un dossier de la galerie (ex. `Pictures/<examen>` ou `DCIM/<examen>`) ; les séries peuvent être dans des sous-dossiers (lecture récursive) ;
-- le bouton flottant **« Dossier »** (en bas à droite) ouvre le sélecteur Android (départ dans `Pictures`), convertit le dossier choisi en chemin réel (`primary:Pictures/x` → `/storage/emulated/0/Pictures/x` ; carte SD `ABCD-1234:x` → `/storage/ABCD-1234/x`), le met dans le champ « dossier » de la page et l'ouvre. On peut aussi saisir le chemin à la main ; le bouton « Parcourir » (tkinter) n'existe pas sur Android ;
+- un **toucher dans le champ de la séance A ou B** ouvre le sélecteur Android (départ dans `Pictures`, puis dans le dernier dossier choisi pour CE champ : A et B sont indépendants), convertit le dossier choisi en chemin réel (`primary:Pictures/x` → `/storage/emulated/0/Pictures/x` ; carte SD `ABCD-1234:x` → `/storage/ABCD-1234/x`), le met dans le champ et le charge (A) ou lance la comparaison (B). Android demande une confirmation système « Autoriser PetScan à accéder au dossier ? » à chaque choix ; tkinter n'existe pas sur Android ;
+- tactile : appui long sur une image = loupe ×4 qui suit le doigt (relâcher = clic à cet endroit), pincement à deux doigts = zoom et déplacement, glisser-déposer et menu natifs de l'image désactivés ;
 - le bouton retour revient en arrière dans la page, puis ferme l'appli.
 
 Limites de l'APK :

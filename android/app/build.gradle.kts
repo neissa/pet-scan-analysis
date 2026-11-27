@@ -21,6 +21,10 @@ val copyPage by tasks.registering(Sync::class) {
     into(gen.map { it.dir("assets") })
 }
 
+// la copie des sources doit précéder tout le reste (sinon l'APK part sans le code Python ni la page)
+tasks.named("preBuild") { dependsOn(copyPython, copyPage) }
+tasks.configureEach { if (name != "copyPython" && name != "copyPage") mustRunAfter(copyPython, copyPage) }
+
 android {
     namespace = "fr.petscan"
     compileSdk = 36

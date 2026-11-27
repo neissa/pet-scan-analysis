@@ -10,13 +10,11 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.Settings;
-import android.view.Gravity;
 import android.view.View;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.Button;
 import android.widget.FrameLayout;
 
 import com.chaquo.python.PyObject;
@@ -36,10 +34,11 @@ import java.net.Socket;
 public class MainActivity extends Activity {
     static final int PORT = 8000;
     static final String URL = "http://127.0.0.1:" + PORT + "/";
-    static final int PICK_FOLDER = 1;
+    static final int PICK_A = 1, PICK_B = 2;  // un sélecteur par champ dossier : séance A (#folder) et séance B (#cfolder)
     static boolean serverStarted;  // un seul serveur par processus, même si l'activité est recréée
 
     WebView web;
+    final String[] last = {null, null};  // dernier dossier choisi par champ : le sélecteur y repart, indépendamment pour A et B
 
     @Override
     protected void onCreate(Bundle saved) {
@@ -59,12 +58,13 @@ public class MainActivity extends Activity {
             }
         });
         root.addView(web);
-        Button folder = new Button(this);
-        folder.setText("Dossier");
-        folder.setAlpha(0.75f);
-        folder.setOnClickListener(v -> pickFolder());
-        root.addView(folder, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.END));
+        web.addJavascriptInterface(new Object() {  // appelé par la page : un clic dans un champ dossier ouvre le sélecteur Android
+            @android.webkit.JavascriptInterface
+            public void pick(String field) {
+                if ("folder".equals(field)) runOnUiThread(() -> pickFolder(PICK_A));
+                else if ("cfolder".equals(field)) runOnUiThread(() -> pickFolder(PICK_B));
+            }
+        }, "PetScanAndroid");
         setContentView(root);
         web.loadData("<p style='font:20px sans-serif'>Démarrage du serveur…</p>", "text/html; charset=utf-8", null);
         askStorage();
@@ -125,11 +125,11 @@ public class MainActivity extends Activity {
         }
     }
 
-    void pickFolder() {
+    void pickFolder(int req) {
+        String from = last[req - 1] != null ? last[req - 1] : "primary:Pictures";  // départ : le dernier choix de CE champ
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-        i.putExtra(DocumentsContract.EXTRA_INITIAL_URI,
-                DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Pictures"));
-        startActivityForResult(i, PICK_FOLDER);
+        i.putExtra(DocumentsContract.EXTRA_INITIAL_URI, DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", from));
+        startActivityForResult(i, req);
     }
 
     /** docId « primary:Pictures/x » -> /storage/emulated/0/Pictures/x ; « ABCD-1234:x » (carte SD) -> /storage/ABCD-1234/x. */
@@ -143,12 +143,14 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
-        if (req != PICK_FOLDER || res != RESULT_OK || data == null || data.getData() == null) return;
+        if ((req != PICK_A && req != PICK_B) || res != RESULT_OK || data == null || data.getData() == null) return;
         String docId = DocumentsContract.getTreeDocumentId(data.getData());
         if (!docId.contains(":")) return;  // fournisseur autre que le stockage local (cloud…) : pas de chemin réel
         String path = treeToPath(docId, Environment.getExternalStorageDirectory().getAbsolutePath());
-        // champ « dossier » et ouverture, comme si l'utilisateur avait saisi le chemin dans la page
-        web.evaluateJavascript("document.getElementById('folder').value=" + JSONObject.quote(path) + ";openFolder();", null);
+        last[req - 1] = docId;
+        // seul le champ qui a demandé le sélecteur change : A ouvre la séance A, B charge la séance B pour la comparaison
+        String field = req == PICK_A ? "folder" : "cfolder", open = req == PICK_A ? "openFolder" : "openCompare";
+        web.evaluateJavascript("document.getElementById('" + field + "').value=" + JSONObject.quote(path) + ";" + open + "();", null);
     }
 
     @Override

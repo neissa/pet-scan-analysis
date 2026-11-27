@@ -35,12 +35,13 @@
   @keyframes slide { from { margin-left: 0; } to { margin-left: 65%; } }
   @media (prefers-reduced-motion: reduce) { #toast .bar.indet i { animation: none; width: 100%; opacity: .5; } #toast .bar i { transition: none; } }
   #folder, #cfolder { flex: 1 1 auto; min-width: 8rem; max-width: 34rem; }
-  .tools { position: static; min-height: 44px; padding: 6px 16px; }
+  .tools { position: static; min-height: 44px; padding: 6px 16px; flex: 0 0 auto; }   /* flex: 0 0 auto : la barre grandit avec son contenu (curseurs sous leur libellé) au lieu d'être écrasée */
   #autoopts { display: flex; align-items: center; gap: 16px; }
   .tools .row { display: flex; align-items: center; gap: 8px; margin: 0; }
   .tools .row > span { display: inline; white-space: nowrap; }
+  #pctbox, #tolbox, #alphabox { flex-direction: column; align-items: stretch; gap: 2px; }   /* texte au-dessus, curseur dessous */
   .tools .row input[type=range] { width: 140px; }
-  #reset { margin-left: auto; }
+  #autocenter { margin-left: auto; }   /* Autocentrage et Réinitialiser le zoom : à droite de la ligne d'outils */
   #gear { display: inline-flex; align-items: center; justify-content: center; padding: 3px 6px; }
   #gear[aria-expanded=true] { background: var(--line); }
 
@@ -48,6 +49,8 @@
         border: 1px solid var(--line); background: var(--surface-2); padding: 3px 10px; }
   input[type=text], input[type=number] { background: var(--bg); }
   button { cursor: pointer; }
+  button[aria-pressed=true] { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.step { min-width: 40px; min-height: 40px; margin-left: 4px; padding: 0; font-size: 20px; line-height: 1; touch-action: manipulation; }
   button:hover:not(:disabled) { background: #48484a; }
   button:disabled { opacity: .5; cursor: default; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }   /* blanc sur --accent : 6:1 */
@@ -78,8 +81,12 @@
   .vrow { display: contents; }
   .zcol { align-self: end; }
   .zcol input[type=range] { writing-mode: vertical-lr; direction: rtl; width: 28px; height: var(--vh); }
-  .miprow { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-top: 20px; }   /* MIP sur sa propre ligne */
-  .miptools { display: flex; flex-direction: column; gap: 8px; max-width: 220px; align-self: center; }
+  /* MIP A, B et mix sur une même ligne, dans la même grille que les vues ; leurs images sont alignées en haut :
+     les figures sans poignée A | B (A, B) réservent la place de celle du mix, et le curseur d'angle est sous l'image */
+  .miprow { display: grid; grid-template-columns: 28px repeat(3, max-content); gap: 12px; align-items: start; margin-top: 20px; }
+  .miprow figure:not(.mix) { padding-top: 22px; }
+  .miprow figure figcaption { top: 30px; }
+  .miptools { grid-column: 2 / -1; display: flex; align-items: center; gap: 16px; }
   .hint { color: var(--label-3); font-size: 12px; margin: 0; }
   figure { position: relative; margin: 0; flex: 0 0 auto; }
   figcaption { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 1px 8px; border-radius: 6px; font-size: 12px; color: var(--label-2);
@@ -87,7 +94,8 @@
   figure.mix figcaption { top: 30px; }
   figcaption b { color: var(--label); font-variant-numeric: tabular-nums; }
   .wrap { position: relative; line-height: 0; width: fit-content; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
-  .wrap img { display: block; height: var(--vh); width: auto; background: #000; cursor: crosshair; }
+  .wrap img { display: block; height: var(--vh); width: auto; background: #000; cursor: crosshair;
+              -webkit-user-drag: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: pan-y; }
   .wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   figure > input[type=range] { margin-top: 8px; }
   /* poignée de la barre de séparation A | B (ligne mix) */
@@ -139,16 +147,14 @@
 <header class="toolbar">
   <div class="tb-lead">
     <b>Séance A</b>
-    <input id="folder" type="text" list="recent" placeholder="Dossier DICOM (TEP + CT)" aria-label="Dossier DICOM de la séance A">
+    <input id="folder" type="text" placeholder="Cliquer pour choisir le dossier DICOM (TEP + CT)" aria-label="Dossier DICOM de la séance A">
     <datalist id="recent"></datalist>
-    <button id="open">Ouvrir</button>
-    <button id="browse" hidden>Parcourir…</button>
+    <button id="open">Charger</button>
   </div>
   <div class="tb-lead">
     <b>Séance B</b>
-    <input id="cfolder" type="text" list="recent" placeholder="Dossier DICOM de la séance B (autre date, même patient)" aria-label="Dossier de la séance B">
+    <input id="cfolder" type="text" placeholder="Cliquer pour choisir le dossier de la séance B (autre date, même patient)" aria-label="Dossier de la séance B">
     <button id="cload">Comparer</button>
-    <button id="cbrowse" hidden>Parcourir…</button>
   </div>
   <div class="tb-trail">
     <button id="pdf" class="primary">Exporter PDF</button>
@@ -162,11 +168,12 @@
 </header>
 
 <nav class="toolbar tools" aria-label="Outils">
-  <div class="seg" role="radiogroup" aria-label="Outil">
-    <label title="Un clic positionne les autres coupes"><input type="radio" name="tool" value="nav" checked><span>Naviguer</span></label>
-    <label title="Un clic, le trait suit la souris, un 2e clic le fige (Échap annule)"><input type="radio" name="tool" value="ruler"><span>Règle</span></label>
-    <label title="Un clic sur une structure : plus grande dimension et dimension perpendiculaire"><input type="radio" name="tool" value="auto"><span>Mesure auto</span></label>
-  </div>
+  <label class="row" title="Naviguer : un clic positionne les autres coupes. Règle : un clic, le trait suit la souris, un 2e clic le fige (Échap annule). Mesure auto : un clic sur une structure donne sa plus grande dimension et la dimension perpendiculaire."><span>Outil</span>
+    <select id="toolsel" aria-label="Outil">
+      <option value="nav">Naviguer</option>
+      <option value="ruler">Règle</option>
+      <option value="auto">Mesure auto</option>
+    </select></label>
   <div id="autoopts" hidden>
     <label class="row" id="srcbox"><span>Mesure sur</span>
       <select id="src"><option value="pet">TEP</option><option value="ct">CT</option></select></label>
@@ -177,6 +184,7 @@
   </div>
   <label class="row" id="alphabox" hidden title="Opacité du TEP sur le CT (molette pour ajuster)"><span>Opacité TEP <b id="alphav">60</b> %</span>
     <input id="alpha2" type="range" min="0" max="1" step="0.05" value="0.6"></label>
+  <button id="autocenter" aria-pressed="false" title="Autocentrage : les vues zoomées restent centrées sur le curseur croisé (un appui recentre tout de suite)">Autocentrage</button>
   <button id="reset">Réinitialiser le zoom</button>
 </nav>
 
@@ -254,9 +262,9 @@
     <details class="sec">
       <summary>Points de fixation</summary>
       <label class="row"><span>Seuil des points de fixation (SUV)</span>
-        <input id="thr" type="number" value="2.5" step="0.1" min="0"></label>
+        <input id="thr" type="number" value="2.5" step="0.1" min="0"><button type="button" class="step" data-for="thr" data-d="-1" aria-label="Diminuer" title="Diminuer (maintenir : répéter)">−</button><button type="button" class="step" data-for="thr" data-d="1" aria-label="Augmenter" title="Augmenter (maintenir : répéter)">+</button></label>
       <label class="row" title="Masque les points plus petits (bruit : quelques voxels isolés)"><span>Volume minimum (ml)</span>
-        <input id="volmin" type="number" value="0.1" step="0.1" min="0"></label>
+        <input id="volmin" type="number" value="0.1" step="0.1" min="0"><button type="button" class="step" data-for="volmin" data-d="-1" aria-label="Diminuer" title="Diminuer (maintenir : répéter)">−</button><button type="button" class="step" data-for="volmin" data-d="1" aria-label="Augmenter" title="Augmenter (maintenir : répéter)">+</button></label>
       <p class="note" id="lescount"></p>
       <label class="row"><span>Favoris seulement (★)</span>
         <input id="favonly" type="checkbox"></label>
@@ -308,11 +316,12 @@ const offParam = s => off[s].map(v => -v).join(",");
 let rev = 0;  // révision des données : change l'URL des images quand le CT change (même URL = le navigateur ne recharge pas)
 const ms = [];  // mesures : {v, i, kind: "ruler"|"auto", source, items, text, X, Y (auto : point cliqué, fractions de l'image entière)}
 let shape, spacing, pending = null;  // pending : 1er point de la règle {v, i, a, cur}
+let lastTouch = 0;                  // dernier événement tactile (les souris synthétisées juste après sont ignorées)
 let lastMove = null;                 // dernière position souris {v, r, x, y} pour la loupe
 
 const cur = v => sliders[v] ? +sliders[v].value : 0;
 const curFor = (v, r) => v === "mip" && r !== "a" ? 0 : cur(v);  // MIP de B et du mix : toujours de face
-const tool = () => document.querySelector("input[name=tool]:checked").value;
+const tool = () => $("toolsel").value;
 const mmSize = v => { const [r, c] = ROWCOL[v]; return [shape[c] * spacing[c], shape[r] * spacing[r]]; };  // [largeur, hauteur] mm
 const mmDist = (v, a, b) => { const [W, H] = mmSize(v); return Math.hypot((b[0] - a[0]) * W, (b[1] - a[1]) * H); };
 // fractions de l'image affichée (zoomée) <-> fractions de l'image entière
@@ -330,6 +339,7 @@ function pick(view, X, Y) {
   if (view === "axial") { set("sagittal", nx, X); set("coronal", ny, Y); }
   else if (view === "sagittal") { set("coronal", ny, X); set("axial", nz, 1 - Y); }
   else { set("sagittal", nx, X); set("axial", nz, 1 - Y); }  // coronal ou mip
+  if (autoCenter) recenter();
   refresh();
   if (lesionList.length) renderLesions();  // la colonne Dist. repart du nouveau point
 }
@@ -341,6 +351,9 @@ function crossCenter(v) {
   if (v === "sagittal") return [(y + .5) / ny, 1 - (z + .5) / nz];
   return [(x + .5) / nx, 1 - (z + .5) / nz];  // coronal ou mip
 }
+// Autocentrage : les vues zoomées suivent le curseur croisé (après un clic, un curseur de coupe ou la molette)
+let autoCenter = false;
+const recenter = () => { for (const [v] of views) if (zoom[v].z > 1) zoom[v] = centered(v, zoom[v].z); };
 const centered = (v, z) => { const [cx, cy] = crossCenter(v), w = 1 / z; return { z, x0: clamp(cx - w / 2, 0, 1 - w), y0: clamp(cy - w / 2, 0, 1 - w) }; };
 // Curseurs verticaux de zoom (un par ligne, synchronisés) : reflètent le dernier zoom appliqué
 const syncZoom = z => document.querySelectorAll(".zoomr").forEach(s => s.value = z);
@@ -467,7 +480,7 @@ function updateLoupe() {
     g.stroke();
   }
   L.style.left = (m.x + 24 + S > innerWidth ? m.x - 24 - S : m.x + 24) + "px";
-  L.style.top = (m.y + 24 + S > innerHeight ? m.y - 24 - S : m.y + 24) + "px";
+  L.style.top = (m.touch ? (m.y - 40 - S < 0 ? m.y + 40 : m.y - 40 - S) : m.y + 24 + S > innerHeight ? m.y - 24 - S : m.y + 24) + "px";
   L.hidden = false;
 }
 
@@ -659,7 +672,8 @@ async function watch(rebuild = true) {
 
 async function start() {
   const info = await (await fetch("/info")).json();
-  $("browse").hidden = !info.browse;
+  browseOk = !!info.browse;  // sélecteur de dossier natif disponible côté serveur (tkinter)
+  for (const id of ["folder", "cfolder"]) $(id).readOnly = browseOk || !!window.PetScanAndroid;
   $("recent").innerHTML = (info.recent || []).map(f => `<option value="${f.replace(/"/g, "&quot;")}">`).join("");
   if (!info.loaded) { toast("Choisissez un dossier DICOM (TEP + CT)."); return watch(); }
   $("folder").value = info.folder || "";
@@ -712,7 +726,7 @@ async function build(info) {
       `aria-label="Zoom des vues (ligne ${ROWNAME[r]})" title="Zoom, centré sur le point courant (molette)"></div>` +
       SLICES.map(v => fig(v, r)).join("") + `</div>`).join("") +
     `<div class="vrow"><div></div>` + SLICES.map(v => `<input type="range" id="s-${v}" aria-label="Coupe ${v}">`).join("") + `</div>`;
-  $("miprow").innerHTML = ROWS.map(r => fig("mip", r)).join("") + `<div class="miptools"><button id="play" disabled>Lecture</button>` +
+  $("miprow").innerHTML = "<div></div>" + ROWS.map(r => fig("mip", r)).join("") + `<div class="miptools"><button id="play" disabled>Lecture</button>` +
     `<p class="hint">Le curseur d'angle (ou la molette sur le MIP, 10° par cran) fait tourner le MIP de A autour de l'axe vertical ; B et le mix restent de face.</p></div>`;
   $("play").onclick = togglePlay;
   for (const z of document.querySelectorAll(".zoomr")) z.oninput = () => setZoom(+z.value);
@@ -744,7 +758,7 @@ async function build(info) {
     } else {  // MIP : le curseur est l'angle de rotation, de 0 à 350° par pas de 10°
       s.min = 0; s.max = 350; s.step = 10; s.value = 0;
     }
-    s.oninput = () => refreshView(v);
+    s.oninput = () => { if (autoCenter) { recenter(); SLICES.forEach(refreshView); } else refreshView(v); };
   }
   // comparaison : on repart de la séance A seule ; si le serveur a déjà une séance B recalée, l'interface la reprend
   cmpMode = "a"; setCmpReady(false);
@@ -754,7 +768,6 @@ async function build(info) {
   loadPatient();
   watchOrgans();
   watchMips();
-  $("cbrowse").hidden = !info.browse;
   $("cfolder").value = $("cfolder").value || (info.recent || []).find(f => f !== info.folder) || "";
   watchCompare();
 }
@@ -772,7 +785,8 @@ function setupImg(v, r) {
   };
   // trait de la règle et loupe suivent la souris (une image par frame)
   img.onmousemove = e => {
-    lastMove = { v, r, x: e.clientX, y: e.clientY };
+    if (!e.touch && Date.now() - lastTouch < 800) return;  // souris synthétisées par le tactile : ignorées
+    lastMove = { v, r, x: e.clientX, y: e.clientY, touch: !!e.touch };
     organTip(v, r, e.clientX, e.clientY);
     if (raf) return;
     raf = requestAnimationFrame(() => {
@@ -784,6 +798,57 @@ function setupImg(v, r) {
     });
   };
   img.onmouseleave = () => { lastMove = null; updateLoupe(); $("tip").hidden = true; };
+  // Tactile : appui long = loupe ×4 qui suit le doigt, relâcher = clic à cet endroit ; un glissement avant 0,35 s reste un défilement.
+  // Glisser-déposer et menu natifs de l'image sont annulés.
+  img.draggable = false;
+  img.ondragstart = img.oncontextmenu = e => e.preventDefault();
+  let hold = 0, held = false, p0 = null, pinch = null;
+  // Pincement à deux doigts : zoom et déplacement ; le point de l'image sous le milieu des doigts les suit (comme Ctrl + molette)
+  const mid2 = e => { const b = img.getBoundingClientRect(), [a, c] = e.touches;
+    return { mx: ((a.clientX + c.clientX) / 2 - b.left) / b.width, my: ((a.clientY + c.clientY) / 2 - b.top) / b.height,
+             d: Math.hypot(a.clientX - c.clientX, a.clientY - c.clientY) }; };
+  const stop = () => { clearTimeout(hold); held = false; lastMove = null; updateLoupe(); $("tip").hidden = true; };
+  img.addEventListener("touchstart", e => {
+    lastTouch = Date.now(); clearTimeout(hold); held = false;
+    if (e.touches.length === 2) {  // début du pincement : on annule la loupe et on retient le point d'ancrage
+      lastMove = null; updateLoupe();
+      const m = mid2(e);
+      pinch = { d0: m.d || 1, z0: zoom[v].z, anchor: toFull(v, m.mx, m.my), used: false };
+      return;
+    }
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0]; p0 = [t.clientX, t.clientY];
+    hold = setTimeout(() => { held = true; img.onmousemove({ clientX: p0[0], clientY: p0[1], touch: true }); updateLoupe(); }, 350);
+  }, { passive: true });
+  img.addEventListener("touchmove", e => {
+    lastTouch = Date.now();
+    if (pinch && e.touches.length === 2) {
+      e.preventDefault();
+      const m = mid2(e), z2 = clamp(pinch.z0 * m.d / pinch.d0, 1, 16), w = 1 / z2, [X, Y] = pinch.anchor;
+      pinch.used = true;
+      zoom[v] = { z: z2, x0: clamp(X - m.mx * w, 0, 1 - w), y0: clamp(Y - m.my * w, 0, 1 - w) };
+      if (v !== "mip") syncZoom(z2);
+      return refreshView(v);
+    }
+    const t = e.touches[0];
+    if (!held) { if (Math.hypot(t.clientX - p0[0], t.clientY - p0[1]) > 10) clearTimeout(hold); return; }
+    e.preventDefault();  // plus de défilement pendant que la loupe suit le doigt
+    img.onmousemove({ clientX: t.clientX, clientY: t.clientY, touch: true });
+  }, { passive: false });
+  img.addEventListener("touchend", e => {
+    lastTouch = Date.now();
+    if (pinch) {  // fin du pincement : pas de clic synthétique ; le doigt restant ne déclenche ni loupe ni clic
+      if (pinch.used) e.preventDefault();
+      if (e.touches.length === 0) pinch = null;
+      return clearTimeout(hold);
+    }
+    if (!held) return clearTimeout(hold);
+    e.preventDefault();  // pas de clic synthétique en plus
+    const t = e.changedTouches[0], b = img.getBoundingClientRect();
+    stop();
+    onClick(v, r, (t.clientX - b.left) / b.width, (t.clientY - b.top) / b.height);
+  });
+  img.addEventListener("touchcancel", () => { pinch = null; stop(); });
   img.addEventListener("wheel", e => {
     const dy = e.deltaY || e.deltaX;  // Maj + molette : certains navigateurs passent en défilement horizontal
     if (e.ctrlKey) {  // Ctrl + molette : zoom centré sur la souris, le point sous le curseur reste fixe
@@ -1025,10 +1090,6 @@ $("mixmode").onchange = () => { syncMix(); refresh(); };
 $("cload").onclick = openCompare;
 $("autoalign").onclick = autoAlign;
 $("cfolder").onkeydown = e => { if (e.key === "Enter") openCompare(); };
-$("cbrowse").onclick = async () => {
-  const r = await (await fetch("/browse")).json();
-  if (r.folder) { $("cfolder").value = r.folder; openCompare(); }
-};
 // Couches : TEP (case) et CT (une série ou aucune). Le mode d'affichage s'en déduit : TEP + CT = fusion, TEP seul, CT seul.
 let curCt = "";  // série CT actuellement chargée par le serveur
 const ctChosen = () => document.querySelector("input[name=ctl]:checked")?.value || "";
@@ -1059,16 +1120,42 @@ $("ctlayers").onchange = async () => {
   syncMode();
 };
 $("favonly").onchange = $("volmin").oninput = renderLesions;
+// Boutons − / + des champs numériques (seuil, volume mini) : un pas par appui, répétition en maintenant ; sans clavier
+for (const b of document.querySelectorAll("button.step")) {
+  const inp = $(b.dataset.for), go = () => {
+    const st = +inp.step || 1, d = +b.dataset.d, dec = (String(st).split(".")[1] || "").length;
+    inp.value = Math.max(+inp.min || 0, +(((parseFloat(inp.value) || 0) + d * st)).toFixed(dec));
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  let t0 = 0, t1 = 0;
+  const end = () => { clearTimeout(t0); clearInterval(t1); };
+  b.onpointerdown = e => { e.preventDefault(); go(); end(); t0 = setTimeout(() => { t1 = setInterval(go, 90); }, 450); };
+  b.onpointerup = b.onpointerleave = b.onpointercancel = end;
+  b.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
+}
 $("thr").onchange = lesions; // Entrée ou perte du focus : tout de suite
 $("thr").oninput = () => { clearTimeout(lesTimer); lesTimer = setTimeout(lesions, 350); };  // en tapant ou avec les flèches : après une courte pause
 $("pct").oninput = () => { $("pctv").textContent = $("pct").value; remeasure(); };
 $("tol").oninput = () => { $("tolv").textContent = $("tol").value; remeasure(); };
 $("open").onclick = openFolder;
 $("folder").onkeydown = e => { if (e.key === "Enter") openFolder(); };
-$("browse").onclick = async () => {
-  const r = await (await fetch("/browse")).json();
-  if (r.folder) { $("folder").value = r.folder; openFolder(); }
-};
+// Un clic dans un champ dossier (A ou B, chacun son propre chemin) ouvre le sélecteur de dossier natif : celui du serveur sur PC,
+// celui d'Android dans l'application (le pont PetScanAndroid est fourni par la WebView). Au clavier (Tab), on peut toujours saisir un chemin.
+let browseOk = false, browsing = false;
+for (const [id, open] of [["folder", () => openFolder()], ["cfolder", () => openCompare()]]) {
+  $(id).onclick = async () => {
+    if (window.PetScanAndroid) return PetScanAndroid.pick(id);
+    if (!browseOk) return;
+    if (browsing) return toast("Le sélecteur de dossier est déjà ouvert (il peut être derrière cette fenêtre).", true);
+    browsing = true;  // un seul dialogue à la fois (le serveur attend la fermeture de la boîte)
+    toast("Choisissez le dossier dans la fenêtre qui s'ouvre…", true);
+    try { const r = await (await fetch("/browse")).json(); toast(""); if (r.folder) { $(id).value = r.folder; open(); } }
+    catch { toast("Sélecteur de dossier indisponible : saisissez le chemin.", false); }
+    finally { browsing = false; }
+  };
+}
+if (window.PetScanAndroid) for (const id of ["folder", "cfolder"]) $(id).readOnly = true;
+for (const id of ["folder", "cfolder"]) $(id).title = "Cliquer pour choisir un dossier";
 // Export PDF : envoie l'état de l'écran (3 coupes, zoom, réglages, mesures, infos patient) ; le serveur refait le rendu.
 // La séance exportée est celle de la dernière ligne cliquée (A, B, mix A | B ou différence).
 $("pdf").onclick = async () => {
@@ -1089,9 +1176,14 @@ $("pdf").onclick = async () => {
   } catch (e) { toast("Export PDF impossible : " + e.message); }
   $("pdf").disabled = false;
 };
+$("autocenter").onclick = () => {
+  autoCenter = !autoCenter;
+  $("autocenter").setAttribute("aria-pressed", autoCenter);
+  if (autoCenter) { recenter(); refresh(); }
+};
 $("reset").onclick = () => { for (const [v] of views) zoom[v] = { z: 1, x0: 0, y0: 0 }; syncZoom(1); refresh(); };
 $("clear").onclick = () => { ms.length = 0; pending = null; marker = null; showRes(); drawAll(); };
-document.querySelectorAll("input[name=tool]").forEach(r => r.onchange = () => { pending = null; syncTool(); showRes(); drawAll(); updateLoupe(); });
+$("toolsel").onchange = () => { pending = null; syncTool(); showRes(); drawAll(); updateLoupe(); };
 document.addEventListener("keydown", e => { if (e.key === "Escape") { pending = null; showRes(); drawAll(); } });
 // Panneau de droite redimensionnable : on glisse son bord gauche ; la largeur choisie est mémorisée dans le navigateur.
 const setInsp = w => { document.documentElement.style.setProperty("--insp", clamp(w, 320, 760) + "px"); drawAll(); };
