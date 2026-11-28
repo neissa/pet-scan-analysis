@@ -11,6 +11,7 @@
     --label: #f5f5f7; --label-2: #aeaeb2; --label-3: #8e8e93;   /* 15:1, 7.7:1, 5.2:1 sur --bg */
     --accent: #0b63ce; --accent-text: #64b5ff; --warn: #ff9f0a; --focus: #64b5ff;
     --hover: #48484a; --toast: rgba(44,44,46,.96); --res: #ffd60a; --up: #ff6961; --down: #64b5ff; color-scheme: dark;
+    --s1: #64b5ff; --s2: #ff9f0a; --s3: #30d158; --s4: #bf5af2; --s5: #ff6961; --s6: #ffd60a;   /* séries des courbes de suivi */
     --font: -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   }
   :root[data-theme=light] {
@@ -18,6 +19,7 @@
     --label: #1c1c1e; --label-2: #48484a; --label-3: #636366;   /* 16:1, 8:1, 5:1 sur --bg */
     --accent: #0b63ce; --accent-text: #0a5fc2; --warn: #a85400; --focus: #0a64d0;
     --hover: #d1d1d6; --toast: rgba(255,255,255,.97); --res: #8a5a00; --up: #c0201a; --down: #0a5fc2; color-scheme: light;
+    --s1: #0a5fc2; --s2: #a85400; --s3: #1e7d34; --s4: #7d3fb8; --s5: #c0201a; --s6: #8a5a00;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -146,6 +148,9 @@
   #dlist { overflow-wrap: anywhere; }
   td.up { color: var(--up); } td.down { color: var(--down); }   /* évolution d'un point de fixation : hausse / baisse */
   tr.excl td:not(.ok) { color: var(--label-3); text-decoration: line-through; }   /* point exclu (physiologique ou décoché) */
+  #fcurves .curve { margin-top: 10px; } #fcurves svg { display: block; }
+  #fcurves .lg { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+  #fcurves .lg button { min-height: 0; padding: 1px 6px; font-size: 12px; } #fcurves .lg button.off { opacity: .5; text-decoration: line-through; }
   th[data-k] { cursor: pointer; user-select: none; white-space: nowrap; } th[data-k]:hover { color: var(--label); }
   tr.les { cursor: pointer; }
   tr.les:hover td, tr.les:focus-visible td { background: var(--surface-2); }
@@ -306,6 +311,7 @@
       <p id="fmsg" class="hint" role="status"></p>
       <table id="ftbl"></table>
       <div id="fnew"></div>
+      <div id="fcurves"></div>
       <div id="fanalyse" hidden>
         <label class="row"><span>Type de cancer</span><select id="fcancer"></select></label>
         <label class="row"><span>Méthode</span><select id="fmethod"></select></label>
@@ -1352,7 +1358,7 @@ async function showMap() {
 // Une ligne par lésion, une colonne par date (référence, dates enregistrées, puis cette séance si elle n'est pas enregistrée) ;
 // variation du SUVmax en % par rapport à la référence et à la date précédente (dernière colonne mesurée).
 function renderFollow() {
-  if (!fmap) { $("ftbl").innerHTML = ""; $("fnew").replaceChildren(); return; }
+  if (!fmap) { $("ftbl").innerHTML = ""; $("fnew").replaceChildren(); $("fcurves").replaceChildren(); return; }
   const cols = fmap.dates_sorted.map(d => ({ d, vals: fmap.dates[d].values || {} }));
   if (fres && !fmap.dates[fres.date]) cols.push({ d: fres.date + " (cette séance)", vals: fres.rows, cur: true });
   const sul = fmap.unit === "SUL";
@@ -1461,6 +1467,7 @@ async function renderAnalyse() {
   if (!fmap) return;
   mcat = mcat || await fetch("/methods").then(x => x.json());
   const a = await fetch("/avis?key=" + fkey).then(x => x.json()), ch = a.choix || fmap.analyse || {};
+  lastAvis = a; renderCurves(a);
   $("fcancer").innerHTML = mcat.cancers.map(c => `<option value="${c.id}">${esc(c.nom)}</option>`).join("");
   if (ch.cancer) $("fcancer").value = ch.cancer;
   fillMethods(ch.methode);
@@ -1499,6 +1506,99 @@ async function saveMethod() {
 }
 $("fcancer").onchange = () => { fillMethods(); saveMethod(); };
 $("fmethod").onchange = saveMethod;
+
+// --- Courbes d'évolution du suivi : une valeur par date enregistrée (SVG inline, sans dépendance) ---
+let lastAvis = null, fcurveMet = "sul";
+const fcurveHidden = new Set();  // lésions masquées depuis la légende
+const CURVE_C = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)", "var(--s5)", "var(--s6)"], CURVE_SH = ["circle", "square", "triangle", "diamond", "cross"], CURVE_G = ["●", "■", "▲", "◆", "✚"];
+const fday = d => { const [j, m, a] = String(d).split("/").map(Number); return Date.UTC(a, m - 1, j); };
+const fnum = v => (Math.round(v * 100) / 100).toString().replace(".", ",");
+// Marqueur : la forme distingue les séries, la couleur seule ne suffit pas
+function shp(s, x, y, c) {
+  const st = `style="fill:${c};stroke:${c}"`;
+  return { circle: `<circle cx="${x}" cy="${y}" r="4.5" ${st}/>`, square: `<rect x="${x - 4}" y="${y - 4}" width="8" height="8" ${st}/>`,
+    triangle: `<path d="M${x} ${y - 5}L${x + 5} ${y + 4}H${x - 5}Z" ${st}/>`, diamond: `<path d="M${x} ${y - 6}L${x + 6} ${y}L${x} ${y + 6}L${x - 6} ${y}Z" ${st}/>`,
+    cross: `<path d="M${x - 5} ${y}H${x + 5}M${x} ${y - 5}V${y + 5}" style="fill:none;stroke:${c};stroke-width:2.5"/>` }[s];
+}
+// dates : "JJ/MM/AAAA" (x = temps réel) ; series : [{nom, c, sh, lw, dash, pts[i] = {v, tip, sh?} ou null (trou)}] ; y depuis 0
+function curveSvg(id, dates, series, unit, refLine, sum) {
+  const W = 480, H = 250, L = 44, R = 34, T = 16, B = 44, t = dates.map(fday), t0 = Math.min(...t), t1 = Math.max(...t);
+  const X = i => t1 === t0 ? (L + W - R) / 2 : L + (t[i] - t0) / (t1 - t0) * (W - L - R);
+  const vmax = Math.max(0, refLine ?? 0, ...series.flatMap(s => s.pts.filter(Boolean).map(p => p.v))) || 1;
+  const p10 = 10 ** Math.floor(Math.log10(vmax * 1.1)), top = Math.ceil(vmax * 1.1 / p10) * p10;
+  const Y = v => H - B - v / top * (H - B - T), rot = dates.length > 4, yb = H - B + 14;
+  const grid = [0, 1, 2, 3, 4].map(k => { const v = top * k / 4, y = Y(v); return `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" style="stroke:var(--line)"/><text x="${L - 6}" y="${y + 4}" text-anchor="end" style="fill:var(--label-2)">${fnum(v)}</text>`; }).join("");
+  const axes = `<line x1="${L}" x2="${L}" y1="${T}" y2="${H - B}" style="stroke:var(--label-3)"/><line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" style="stroke:var(--label-3)"/>` +
+    `<text x="${L}" y="${T - 4}" style="fill:var(--label-2)">${esc(unit)}</text>`;
+  const xl = dates.map((d, i) => `<text x="${X(i)}" y="${yb}" text-anchor="${rot ? "end" : "middle"}"${rot ? ` transform="rotate(-35 ${X(i)} ${yb})"` : ""} style="fill:var(--label-2)">${esc(d)}</text>`).join("");
+  const ref = refLine == null ? "" : `<line x1="${L}" x2="${W - R}" y1="${Y(refLine)}" y2="${Y(refLine)}" style="stroke:var(--label-2);stroke-dasharray:4 3"/>` +
+    `<text x="${W - R}" y="${Y(refLine) - 4}" text-anchor="end" style="fill:var(--label-2)">réf. ${fnum(refLine)}</text>`;
+  const body = series.map(s => {
+    let d = "", pen = false;
+    s.pts.forEach((p, i) => { if (p) { d += `${pen ? "L" : "M"}${X(i)} ${Y(p.v)}`; pen = true; } else pen = false; });  // valeur absente : la courbe est coupée
+    return (d ? `<path d="${d}" style="fill:none;stroke:${s.c};stroke-width:${s.lw}${s.dash ? ";stroke-dasharray:5 4" : ""}"/>` : "") +
+      s.pts.map((p, i) => p ? `<g>${shp(p.sh || s.sh, X(i), Y(p.v), s.c)}<title>${esc(p.tip)}</title></g>` : "").join("");
+  }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-labelledby="${id}" style="width:100%;max-width:${W}px;height:auto;font-size:11px">` +
+    `<title id="${id}">${esc(sum)}</title>${grid}${axes}${ref}${body}${xl}</svg>`;
+}
+function curveTable(dates, series, unit) {
+  return `<details class="subsec"><summary>Tableau des valeurs (${esc(unit)})</summary><table><tr><th>Série</th>${dates.map(d => `<th>${esc(d)}</th>`).join("")}</tr>` +
+    series.map(s => `<tr><th>${esc(s.nom)}</th>${s.pts.map(p => `<td>${p ? fnum(p.v) : "—"}</td>`).join("")}</tr>`).join("") + "</table></details>";
+}
+function renderCurves(a) {
+  const box = $("fcurves");
+  if (!fmap) return box.replaceChildren();
+  const dates = fmap.dates_sorted, det = ((a && a.details) || []).filter(x => !x.provisoire), byD = Object.fromEntries(det.map(x => [x.date, x]));
+  const ref = (det.find(x => x.reference) || {}).reference, rd = fmap.ref_date, tgt = ref && ref[0];
+  // Cible PERCIST : une valeur par date ; référence (carré), nadir repéré = dernier nadir connu (losange)
+  const pk = dates.map(d => d === rd ? ref && { v: ref[1], sh: "square", tip: `${d} : référence, ${ref[0]} ${fnum(ref[1])}` }
+    : byD[d] && byD[d].cible && { v: byD[d].cible[1], tip: `${d} : ${byD[d].metrique} ${fnum(byD[d].cible[1])}` });
+  const nd = [...det].reverse().find(x => x.nadir), ni = nd ? dates.indexOf(nd.nadir[0]) : -1;
+  if (ni >= 0 && pk[ni]) pk[ni] = { ...pk[ni], sh: "diamond", tip: pk[ni].tip + " · nadir" };
+  const u1 = "SULpeak / SULmax", c1 = [{ nom: "Cible PERCIST", c: "var(--label)", sh: "circle", lw: 2.5, pts: pk }];
+  const p1 = pk.some(Boolean)
+    ? curveSvg("fc1", dates, c1, u1, ref && ref[1], `Cible PERCIST, ${u1} : ` + pk.map((p, i) => `${dates[i]} ${p ? fnum(p.v) : "non mesurée"}`).join(", ") +
+      (ref ? `, référence ${fnum(ref[1])}` : "") + (nd ? `, nadir ${nd.nadir[0]} ${fnum(nd.nadir[1])}` : "")) + curveTable(dates, c1, u1)
+    : `<p class="hint">Pas encore de date suivie : la courbe PERCIST apparaît à partir de la première date suivie (avis de statut).</p>`;
+  // Lésions suivies : mesure choisie ; exclues (excrétion, contact) selon l'avis, ou retirées de la carte
+  const met = fcurveMet, u2 = met === "ct" ? "mm" : met === "suv" ? "SUV" : fmap.unit;
+  const what = { sul: "SULpeak (repli SULmax)", suv: "SUVmax", ct: "diamètre CT, plus grand axe" }[met];
+  const val = p => !p ? null : met === "sul" ? (p.sul_peak ?? p.sul_max ?? null) : met === "suv" ? (p.suv_max ?? null) : (p.ct && !p.ct.why ? p.ct.long_mm : null);
+  const exc = l => {
+    if (l.status === "exclu") return "exclue de la carte";
+    const s = det.flatMap(x => x.exclues || []).find(t => t.startsWith(l.name + " (")); if (s) return s.slice(l.name.length + 2, -1);
+    return dates.some(d => ((fmap.dates[d].values || {})[l.id] || {}).flags?.includes("excrétion possible")) ? "excrétion possible" : null;  // sans avis (une seule date)
+  };
+  const all = fmap.lesions.map((l, i) => {
+    const why = exc(l);
+    return { id: String(l.id), g: CURVE_G[i % 5], nom: l.name + (why ? ` (exclue : ${why})` : ""), c: why ? "var(--label-3)" : CURVE_C[i % 6], sh: CURVE_SH[i % 5],
+      dash: !!why, lw: why ? 1.5 : l.name === tgt ? 3.5 : 1.5,
+      pts: dates.map(d => { const v = val((fmap.dates[d].values || {})[l.id]); return v == null ? null : { v, tip: `${l.name} · ${d} : ${fnum(v)} ${u2}` }; }) };
+  });
+  const vis = all.filter(s => !fcurveHidden.has(s.id));
+  const leg = all.map(s => { const off = fcurveHidden.has(s.id); return `<button type="button" data-lid="${esc(s.id)}" aria-pressed="${!off}" class="${off ? "off" : ""}">` +
+    `<span style="color:${s.c}" aria-hidden="true">${s.g}</span> ${esc(s.nom)}</button>`; }).join("");
+  const p2 = vis.some(s => s.pts.some(Boolean))
+    ? curveSvg("fc2", dates, vis, u2, null, `Lésions suivies, ${what} : ` + vis.map(s => `${s.nom} : ` +
+      s.pts.map((p, i) => p ? `${dates[i]} ${fnum(p.v)}` : `${dates[i]} non mesurée`).join(", ")).join(" ; ")) + curveTable(dates, vis, u2)
+    : `<p class="hint">${!all.length ? "Aucune lésion suivie." : !vis.length ? "Toutes les lésions sont masquées (légende)." : "Aucune valeur enregistrée pour cette mesure."}</p>`;
+  box.innerHTML = `<div class="curve"><p class="hint"><b>Cible PERCIST</b> (${u1}, une valeur par date). Carré : référence ; losange : nadir repéré ; trait pointillé : valeur de référence.</p>${p1}</div>` +
+    `<div class="curve"><p class="hint"><b>Lésions suivies</b> : survol d'un point = valeur et date ; cliquez une lésion dans la légende pour la masquer. ` +
+    `Pointillé gris : lésion exclue du calcul PERCIST (excrétion, contact d'un organe physiologique). Un trou = non mesurée à cette date.</p>` +
+    `<label class="row"><span>Mesure</span><select id="fcmet">${[["sul", "SULpeak (repli SULmax)"], ["suv", "SUVmax"], ["ct", "Diamètre CT (mm)"]]
+      .map(([v, t]) => `<option value="${v}"${v === met ? " selected" : ""}>${t}</option>`).join("")}</select></label>` +
+    `<div class="lg">${leg}</div>${p2}</div>`;
+}
+$("fcurves").onclick = e => {
+  const b = e.target.closest("button[data-lid]");
+  if (!b) return;
+  const id = b.dataset.lid;
+  if (fcurveHidden.has(id)) fcurveHidden.delete(id); else fcurveHidden.add(id);
+  renderCurves(lastAvis);
+  $("fcurves").querySelector(`[data-lid="${CSS.escape(id)}"]`)?.focus();
+};
+$("fcurves").onchange = e => { if (e.target.id === "fcmet") { fcurveMet = e.target.value; renderCurves(lastAvis); $("fcmet").focus(); } };
 
 // --- Données enregistrées : inventaire sans identité (appli et navigateur), aperçu puis suppression confirmée ---
 const lsKeys = () => { const k = []; try { for (let i = 0; i < localStorage.length; i++) k.push(localStorage.key(i)); } catch {} return k; };
