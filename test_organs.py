@@ -53,6 +53,104 @@ def liver_phantom(hu, seed=0):
     return np.full(z.shape, 2.0, np.float32), ct.astype(np.int16), liver
 
 
+def ball(c, r):
+    z, y, x = np.mgrid[:60, :70, :70]
+    return sum(((a - ca) / ra) ** 2 for a, ca, ra in zip((z, y, x), c, np.broadcast_to(r, 3))) <= 1
+
+
+def abdo_phantom():
+    """Corps graisseux (-80 HU, SUV 1) avec poumons, sans organe abdominal : on y pose ceux de chaque test."""
+    z, y, x = np.mgrid[:60, :70, :70]
+    ct = np.full(z.shape, -1000.0)
+    ct[((y - 35) ** 2 + (x - 35) ** 2 <= 30 ** 2)] = -80
+    for cx in (23, 47):
+        ct[ball((38, 35, cx), (14, 14, 11))] = -800
+    return np.ones(z.shape, np.float32), ct
+
+
+def test_liver_posterior_right_lobe_kept():
+    suv, ct = abdo_phantom()
+    liver = ball((20, 42, 26), (8, 12, 12))    # lobe droit qui descend jusqu'à la paroi postérieure (y élevés)
+    ct[liver] = 115
+    lab, _ = segment_organs(np.full(ct.shape, 2.0, np.float32), ct, (4, 4, 4), step=1)
+    assert (lab == 4)[liver].mean() > 0.85
+
+
+def test_trachea_is_not_lung():
+    suv, ct = phantom()
+    ct[36:, 33:38, 33:38] = -900          # trachée : tube d'air médian qui monte des poumons jusqu'au cou
+    ct[36:40, 33:38, 30:41] = -900        # rattachée aux deux poumons
+    lab, _ = segment_organs(suv, ct, (4, 4, 4), step=1)
+    assert lab[56, 35, 35] == 0 and lab[38, 35, 23] == 1
+
+
+def test_heart_follows_misregistered_hot_myocardium_but_not_a_node():
+    suv, ct = phantom()
+    myo, node = ball((35, 30, 38), 4), ball((24, 29, 33), 2)
+    suv[myo] = 12.0       # myocarde du TEP décalé vers le poumon gauche par rapport au cœur du CT
+    suv[node] = 4.0       # ganglion cardio-phrénique, bien moins fixant
+    lab, _ = segment_organs(suv, ct, (4, 4, 4), step=1)
+    assert (lab == 3)[myo].mean() > 0.9 and lab[35, 30, 41] == 3 and lab[24, 29, 33] != 3
+
+
+def test_spleen_excludes_adjacent_hot_lesion():
+    suv, ct = abdo_phantom()
+    lesion = ball((18, 44, 58), 4)
+    spleen = ball((18, 44, 50), (6, 8, 8)) & ~lesion
+    ct[spleen], suv[spleen] = 120, 2.0
+    ct[lesion], suv[lesion] = 110, 6.0     # nodule périsplénique : même densité, nettement plus fixant
+    lab, info = segment_organs(suv, ct, (4, 4, 4), step=1)
+    found = lab == 5
+    assert found[spleen].mean() > 0.8 and not found[lesion].any()
+
+
+def test_bladder_whole_and_separate_from_pelvic_mass():
+    suv, ct = abdo_phantom()
+    bladder, mass = ball((8, 35, 35), 5), ball((8, 35, 44), 4) & ~ball((8, 35, 35), 5)
+    ct[bladder], suv[bladder] = 45, 40.0   # urine : CT bruité, la densité ne suffit pas
+    ct[mass], suv[mass] = 50, 7.0          # masse pelvienne collée, moins fixante que l'urine
+    ct += np.random.default_rng(1).normal(0, 20, ct.shape) * (ct > -900)
+    lab, info = segment_organs(suv, ct.astype(np.int16), (4, 4, 4), step=1)
+    found = lab == 8
+    assert found[bladder].mean() > 0.85 and found[mass].sum() < 0.05 * mass.sum()
+
+
+def test_kidney_needs_enhanced_parenchyma():
+    suv, ct = abdo_phantom()
+    kidney, pelvis = ball((10, 45, 20), (9, 6, 5)), ball((10, 45, 20), (5, 3, 2))
+    ct[kidney], suv[kidney] = 180, 2.5     # parenchyme rehaussé, peu fixant
+    ct[pelvis], suv[pelvis] = 10, 10.0     # cavités dilatées, seule zone très fixante (urine)
+    mass = ball((8, 45, 50), 6)
+    ct[mass], suv[mass] = 30, 6.0          # masse rétropéritonéale hyperfixante, non rehaussée
+    lab, _ = segment_organs(suv, ct, (4, 4, 4), step=1)
+    assert (lab == 6)[kidney].mean() > 0.8 and not (lab[mass] == 7).any()
+
+
+def test_free_fluid_found_and_not_on_plain_fat():
+    suv, ct = abdo_phantom()
+    lab, info = segment_organs(suv, ct, (4, 4, 4), step=1)
+    assert 12 not in info
+    fluid = ball((10, 35, 25), (4, 7, 7))
+    ct[fluid] = 10
+    ct += np.random.default_rng(2).normal(0, 15, ct.shape) * (ct > -900)
+    lab, info = segment_organs(suv, ct.astype(np.int16), (4, 4, 4), step=1)
+    assert (lab == 12)[fluid].mean() > 0.6 and ((lab == 12) & ~fluid).sum() < 0.3 * fluid.sum()
+
+
+def test_descending_aorta_and_blood_pool_reference():
+    from petscan import blood_pool_reference
+    suv, ct = phantom()
+    tube = np.zeros(ct.shape, bool)
+    tube[20:50] = ball((0, 38, 40), (99, 3, 3))[0]   # aorte descendante, à gauche, devant le rachis
+    ct[tube], suv[tube] = 160, 1.8
+    lab, info = segment_organs(suv, ct, (4, 4, 4), step=1)
+    # cherchée à hauteur du cœur seulement (sous la crosse, au-dessus du diaphragme)
+    assert 11 in info and (lab == 11)[30:40][tube[30:40]].mean() > 0.5 and not (lab == 11)[~tube].any()
+    ref = blood_pool_reference(suv, lab, (4, 4, 4), 0.8)
+    assert ref["mean"] == pytest.approx(1.8 * 0.8) and ref["seuil"] == pytest.approx(2 * ref["mean"] + 2 * ref["sd"])
+    assert blood_pool_reference(suv, np.zeros_like(lab), (4, 4, 4)) is None
+
+
 @pytest.mark.parametrize("hu", [115, 55])
 def test_liver_found_injected_and_unenhanced(hu):
     suv, ct, liver = liver_phantom(hu)

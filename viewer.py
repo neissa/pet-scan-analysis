@@ -26,7 +26,7 @@ from compare import estimate_shift, refine_shift, shift_volume
 from export_pdf import build_pdf
 from organs import ORGANS, segment_organs
 from patient import read_patient_info, read_sul
-from petscan import (_scaled, analyze, ct_choices, ct_series, default_ct_uid, liver_reference, load_ct, load_suv,
+from petscan import (_scaled, analyze, blood_pool_reference, ct_choices, ct_series, default_ct_uid, liver_reference, load_ct, load_suv,
                      measure_region, measure_tolerance, sul_info)
 
 AXIS = {"axial": 0, "coronal": 1, "sagittal": 2}
@@ -637,7 +637,8 @@ def make_handler(state):
                         except Exception as e:
                             return self._json({"error": f"Référence foie : {type(e).__name__} : {e}"})
                         msg = ref["msg"] if ref else "Référence foie indisponible : foie introuvable ou trop petit"
-                    return self._json({**si, "ref": ref, "ref_msg": msg, "computing": ctv is not None and org is None})
+                    pool = blood_pool_reference(suv, org[0], spacing, si["factor"]) if org is not None else None
+                    return self._json({**si, "ref": ref, "ref_msg": msg, "pool": pool, "computing": ctv is not None and org is None})
                 if u.path == "/img":
                     cmap, mode = q.get("cmap", "jet"), q.get("mode", "pet")
                     z = float(q.get("z", 1))

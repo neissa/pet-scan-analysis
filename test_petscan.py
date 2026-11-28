@@ -195,6 +195,14 @@ def test_lesion_fused_with_bladder_measured_without_bladder_voxels():
     assert 0 < r["mtv_ml"] < les.sum() * vml
 
 
+def test_cardiophrenic_node_against_heart_keeps_its_peak():
+    suv, sp, lab, les = _fused(3, 4.0, (20, 30, 29))         # ganglion collé au cœur, centre à 8 mm de son bord
+    suv[20, 30, 29] = 9.0                                    # pic au centre du ganglion
+    out = analyze(suv, float(np.prod(sp)) / 1000, 2.5, sp, 1.0, lab, margin_mm=10)
+    r = max(out, key=lambda l: l["suv_max"])
+    assert r["suv_max"] == 9.0 and r["physio"] == "Cœur (approx.)" and r["valide"] is True   # marge cœur 5 mm
+
+
 def test_retroperitoneal_lesion_near_kidney_not_excluded():
     suv, sp, lab, les = _fused(6, 5.0, (20, 30, 40), bridge=True)   # à 20 mm du bord du rein, reliée par un pont SUV 3
     vml = float(np.prod(sp)) / 1000

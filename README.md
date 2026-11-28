@@ -62,7 +62,7 @@ pytest -q
 - **Évolution par lésion** : SUVmax B et Δ % dans le tableau.
 
 ### Organes et export
-- **Segmentation d'organes** (approximative) : poumons, cœur, foie, rate, reins, vessie, cerveau, squelette, par règles CT + TEP, hors ligne.
+- **Segmentation d'organes** (approximative) : poumons (sans trachée), cœur, foie, rate (sans la maladie périsplénique hyperfixante), reins, vessie, cerveau, squelette, aorte thoracique descendante (référence pool sanguin PERCIST affichée si le foie est atteint) et liquide libre (ascite, approximatif), par règles CT + TEP, hors ligne. Seuls cœur, reins, vessie et cerveau sont exclus des mesures (marge 10 mm, 5 mm autour du cœur).
 - **Export PDF** : coupes avec mesures, infos patient, liste des mesures. Le PDF contient l'identité du patient : à partager avec précaution.
 
 ### Tactile (tablette)

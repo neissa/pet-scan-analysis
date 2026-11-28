@@ -630,6 +630,8 @@ function renderLesions() {
     (ref ? `<span>Référence foie (sphère ${ref.diam_mm} mm, marge ${ref.erode_mm} mm) <b>${f2(ref.mean)} ± ${f2(ref.sd)} ${u}</b></span>` +
            `<span>Seuil PERCIST (1,5 × moy. + 2 σ) <b>${f2(ref.seuil)} ${u} = ${f2(ref.seuil_suv)} SUV</b></span>` : "") +
     (percist.ref_msg ? `<span${ref ? ' class="warn"' : ""}>${esc(percist.ref_msg)}</span>` : "") +
+    (percist.pool ? `<span>Pool sanguin (aorte, si foie atteint) <b>${f2(percist.pool.mean)} ± ${f2(percist.pool.sd)} ${u} → seuil (2 × moy. + 2 σ) ` +
+                    `${f2(percist.pool.seuil)} ${u} = ${f2(percist.pool.seuil_suv)} SUV</b></span>` : "") +
     `<span>Seuil utilisé <b>${esc($("thr").value)} SUV (${percist.auto ? "PERCIST" : "manuel"})</b></span>` +
     `<span>Total retenu (${kept.length} point${kept.length > 1 ? "s" : ""} ✓) <b>MTV ${kept.reduce((s, l) => s + l.mtv_ml, 0).toFixed(1)} ml · ` +
     `TLG ${kept.reduce((s, l) => s + l.tlg_sul, 0).toFixed(1)} (${u})</b></span>`;

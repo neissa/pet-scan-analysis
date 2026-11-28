@@ -260,6 +260,9 @@ def test_percist_route_sul_fallback_and_lesion_fields():
         assert lp == json.loads(_get(srv, f"/lesions?thr={ref['seuil_suv']!r}")[1]) and min(l["suv_max"] for l in lp) >= ref["seuil_suv"]
         p = json.loads(_get(srv, "/percist")[1])
         assert p["ref"]["mean"] == pytest.approx(2.0 * p["factor"]) and p["ref_msg"] == ""
+        assert p["pool"] is None                                          # pas d'aorte segmentée
+        state.organs = ((lab + 7 * (lab == 4)).astype(lab.dtype), {})   # le foie (4) tenu pour l'aorte (11)
+        assert json.loads(_get(srv, "/percist")[1])["pool"]["mean"] == pytest.approx(2.0 * p["factor"], rel=0.05)
         les = json.loads(_get(srv, "/lesions?thr=2.5")[1])
         assert isinstance(les, list) and next(l for l in les if l["suv_max"] == 5.0)["physio"] == "Vessie"
         assert les[0]["sul_max"] == pytest.approx(les[0]["suv_max"] * p["factor"])

@@ -10,7 +10,7 @@ import pydicom
 from scipy import ndimage, signal
 from scipy.spatial import ConvexHull
 
-from organs import ORGANS, PHYSIO
+from organs import ORGANS, PHYSIO, PHYSIO_MARGIN_MM
 
 
 def _seconds(tm):  # DICOM TM "HHMMSS[.ffffff]"
@@ -289,22 +289,39 @@ def liver_reference(suv, labels, spacing, factor=1.0, diam_mm=30, erode_mm=5, li
             "sphere_reduite": reduite, "msg": msg, "centre": [int(ci + b.start) for ci, b in zip(c, box)]}
 
 
+def blood_pool_reference(suv, labels, spacing, factor=1.0, erode_mm=4, aorta_id=11):
+    """Référence pool sanguin PERCIST (repli quand le foie est atteint) : SUL moyen et écart-type dans l'aorte thoracique
+    descendante segmentée, érodée de `erode_mm` (paroi et volume partiel). Seuil PERCIST = 2 × moyenne + 2 × écart-type.
+    shortcut: tout le segment d'aorte trouvé au lieu du cylindre de 1 × 2 cm de PERCIST. None sans aorte assez large."""
+    ao = labels == aorta_id
+    if not ao.any():
+        return None
+    box = ndimage.find_objects(ao.astype(np.uint8))[0]
+    core = ndimage.distance_transform_edt(np.pad(ao[box], 1), sampling=spacing)[1:-1, 1:-1, 1:-1] > erode_mm
+    if core.sum() < 10:
+        return None
+    vals = suv[box][core].astype(np.float64) * factor
+    mean, sd = float(vals.mean()), float(vals.std())
+    seuil = 2 * mean + 2 * sd
+    return {"mean": mean, "sd": sd, "seuil": seuil, "seuil_suv": seuil / factor, "erode_mm": erode_mm}
+
+
 def analyze(suv, voxel_ml, thr=2.5, spacing=None, factor=1.0, organs=None, margin_mm=10):
     """Lésions = composantes connexes de SUV >= thr. Triées par SUVmax décroissant.
     factor : SUV -> SUL (`sul_info`) ; sul_max, sul_mean, tlg_sul en découlent.
     spacing (z,y,x) mm : ajoute sul_peak (moyenne maximale d'une boule de 1 cm³ centrée dans la lésion).
     organs (avec spacing) : étiquettes de `organs.segment_organs`. Exclusion par voxel : les voxels à moins de margin_mm
-    d'un organe à fixation physiologique (PHYSIO) sont retirés avant l'étiquetage ; une maladie collée à la vessie ou à un
+    (plafonnée par organe, `PHYSIO_MARGIN_MM` : 5 mm pour le cœur) d'un organe à fixation physiologique (PHYSIO) sont retirés avant l'étiquetage ; une maladie collée à la vessie ou à un
     rein garde ainsi ses autres voxels. physio = organe au contact de la zone retirée (sinon None), simple marque ;
     valide reste True (une lésion entièrement dans la zone retirée n'existe plus)."""
     mask = suv >= thr
     grow = lambda sl, h: tuple(slice(max(0, s.start - k), s.stop + k) for s, k in zip(sl, h))
     if organs is not None and spacing is not None:
-        hm = [int(np.ceil(margin_mm / s)) + 1 for s in spacing]
         for oid, sl in enumerate(ndimage.find_objects(organs), 1):
             if sl is not None and oid in PHYSIO:  # distance calculée dans la boîte de l'organe seulement (rapide)
-                w = grow(sl, hm)
-                mask[w] &= ndimage.distance_transform_edt(organs[w] != oid, sampling=spacing) > margin_mm
+                mo = min(margin_mm, PHYSIO_MARGIN_MM.get(oid, margin_mm))
+                w = grow(sl, [int(np.ceil(mo / s)) + 1 for s in spacing])
+                mask[w] &= ndimage.distance_transform_edt(organs[w] != oid, sampling=spacing) > mo
     labels, n = ndimage.label(mask)
     if not n:
         return []
