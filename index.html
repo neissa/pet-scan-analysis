@@ -1404,7 +1404,7 @@ async function applyFollow(ask = true) {
     fkey = key; fres = r;
     $("frecord").disabled = r.date === r.ref_date;
     $("fmsg").textContent = `Recalage : ${r.method}, décalage (z ; y ; x) = ${r.shift_mm.map(v => String(v).replace(".", ",")).join(" ; ")} mm` +
-      (r.score != null ? `, corrélation du squelette ${n2(r.score)}` : "") + `. ${r.new.length} nouvelle(s) fixation(s) proposée(s) (≥ ${$("thr").value} SUV).`;
+      (r.score != null ? `, corrélation du squelette ${n2(r.score)}` : "") + `. ${r.new.length} nouvelle(s) fixation(s) proposée(s) (≥ ${$("thr").value} SUV).` + (r.warning ? ` ⚠ ${r.warning}.` : "");
     await showMap();
   } finally { $("fapply").disabled = false; }
 }

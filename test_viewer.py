@@ -384,7 +384,7 @@ def test_reference_map_follow_three_dates_excretion_new_fixation_and_deletion():
             l1, l2 = f["rows"]["L1"], f["rows"]["L2"]
             assert l1["peak"] == [40 + d[0], 45 + d[1], 30 + d[2]] and l1["suv_max"] == v, f        # recalage, lésion retrouvée
             assert l1["flags"] == [] and "excrétion possible" in l2["flags"] and l2["suv_max"] == 5.5  # urine écartée, lésion gardée
-            assert f["score"] > 0.5 and f["method"].startswith("squelette")
+            assert f["score"] > 0.5 and f["method"].startswith("squelette") and f["warning"] is None  # même grille
             news = [n["peak"] for n in f["new"]]   # boule uniforme de rayon 2 : pic n'importe où dedans
             assert len(news) == bool(extra) and all(max(abs(a - b - c) for a, b, c in zip(n, extra, d)) <= 2 for n in news), news
             assert _post(srv, "/ref/record", {"key": key}) == {"ok": True}
@@ -418,3 +418,58 @@ def test_reference_map_follow_three_dates_excretion_new_fixation_and_deletion():
         assert json.loads(_get(srv, "/data")[1])["patients"] == 0
     finally:
         srv.shutdown()
+
+
+def _mm_session(sp, d_mm, nz_mm, c_mm):
+    """Séance synthétique définie en mm, échantillonnée à l'espacement sp : objet décalé de d_mm (b[p + d] = a[p]).
+    CT : corps cylindrique et squelette asymétrique ; TEP : gaussienne (σ 6 mm, pic 8) centrée en c_mm + d_mm."""
+    import numpy as np
+    z, y, x = (np.arange(int(n // s)).reshape([-1 if i == a else 1 for i in range(3)]) * s - d
+               for a, (n, s, d) in enumerate(zip((nz_mm, 180, 180), sp, d_mm)))
+    shape = np.broadcast(z, y, x).shape
+    ell = lambda c, r: np.broadcast_to(sum(((v - ci) / ri) ** 2 for v, ci, ri in zip((z, y, x), c, r)) <= 1, shape)
+    ct = np.full(shape, -1000, np.int16)
+    ct[np.broadcast_to((y - 90) ** 2 + (x - 90) ** 2 <= 64 ** 2, shape)] = 40
+    ct[np.broadcast_to(((y - 124) ** 2 + (x - 90) ** 2 <= 12 ** 2) & (z >= 0) & (z < 160), shape)] = 500   # colonne
+    ct[ell((60, 80, 44), (10, 8, 20))] = 500                                                                # côtes
+    ct[ell((110, 80, 140), (10, 8, 20))] = 500
+    suv = (1 + 7 * np.exp(-sum((v - c) ** 2 for v, c in zip((z, y, x), c_mm)) / 72)).astype(np.float32)
+    return suv, ct
+
+
+def test_follow_across_grid_spacings_resamples_reference_ct():
+    """Référence à 2 mm, séance suivante à 2,5 mm, décalée et de couverture plus longue : lésion retrouvée, SUVmax < 5 %."""
+    import numpy as np
+    from compare import resample, same_grid
+    sp_a, sp_b, c, d = (2.0, 2.0, 2.0), (2.5, 2.5, 2.5), (80.0, 70.0, 100.0), (10.0, -10.0, 5.0)
+    pat = lambda date: {"Identifiant": "PH-0002", "Naissance": "01/01/1960", "Date de l'examen": date}
+    state = State()
+    srv = _server(state)
+    try:
+        suv, ct = _mm_session(sp_a, (0, 0, 0), 160, c)
+        state.set(suv, sp_a, ct, pat("01/04/2026"), "refA")
+        state.organs = (np.zeros(ct.shape, np.uint8), {})
+        key = _post(srv, "/ref/define", {"lesions": [{"vox": [round(v / s) for v, s in zip(c, sp_a)]}]})["key"]
+        ref = json.loads(_get(srv, f"/ref?key={key}")[1])["dates"]["01/04/2026"]["values"]["L1"]["suv_max"]
+        ct_a = ct
+        suv, ct = _mm_session(sp_b, d, 200, c)
+        state.set(suv, sp_b, ct, pat("01/07/2026"), "autre")
+        state.organs, state._refct = (np.zeros(ct.shape, np.uint8), {}), ("refA", ct_a)
+        f = json.loads(_get(srv, f"/follow?key={key}")[1])
+        r = f["rows"]["L1"]
+        want = [(a + b) / s for a, b, s in zip(c, d, sp_b)]
+        assert max(abs(p - w) for p, w in zip(r["peak"], want)) <= 1, (r["peak"], want, f)
+        assert abs(r["suv_max"] - ref) / ref < 0.05 and f["score"] > 0.5 and f["method"].startswith("squelette"), f
+        assert "2,00 × 2,00 × 2,00 → 2,50 × 2,50 × 2,50" in f["warning"]
+        assert _post(srv, "/ref/record", {"key": key}) == {"ok": True}
+        assert _post(srv, "/ref/update", {"key": key, "op": "add", "vox": r["peak"]})["ok"]   # ramené sur la grille de la référence
+        les = json.loads(_get(srv, f"/ref?key={key}")[1])["lesions"]
+        assert max(abs(a - b) for a, b in zip(les[1]["vox"], les[0]["vox"])) <= 1, les
+    finally:
+        srv.shutdown()
+    v = np.arange(60, dtype=np.float32).reshape(3, 4, 5)
+    assert same_grid((1.37,) * 3, (1.371,) * 3) and not same_grid((1.37,) * 3, (1.35,) * 3)
+    assert np.array_equal(resample(v, (2, 2, 2), (2, 2, 2)), v)                        # même grille : identique
+    w = resample(v, (2, 2, 2), (1, 1, 1))                                               # origine gardée, linéaire
+    assert w.shape == (5, 7, 9) and w[0, 0, 0] == v[0, 0, 0] and w[2, 2, 2] == v[1, 1, 1]
+    assert w[1, 0, 0] == (v[0, 0, 0] + v[1, 0, 0]) / 2
