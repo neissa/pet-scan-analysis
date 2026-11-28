@@ -2,6 +2,8 @@
 
 # NETScan
 
+[![tests](https://github.com/neissa/pet-scan-analysis/actions/workflows/tests.yml/badge.svg)](https://github.com/neissa/pet-scan-analysis/actions/workflows/tests.yml)
+
 **NETScan** est une visionneuse locale pour études TEP/CT (18F-FDG) au format DICOM : SUV, points de fixation, mesures, comparaison de deux séances.
 
 > Recherche / apprentissage uniquement, **pas un dispositif médical**. Les données restent sur votre machine.
@@ -20,7 +22,7 @@ pip install -e .
 python viewer.py "<dossier DICOM>"   # http://127.0.0.1:8000
 python viewer.py --demo              # volume synthétique, sans DICOM
 python petscan.py <dossier> --thr 2.5 --mip mip.png   # ligne de commande
-pytest -q
+pytest -q   # ~110 tests sur fantômes synthétiques, rejoués à chaque push (Python 3.10 avec les versions de l'APK, et 3.13)
 ```
 
 ## Fonctions
