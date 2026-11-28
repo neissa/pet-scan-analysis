@@ -72,3 +72,37 @@ def test_measure_at_excretion_flag_contact_and_physio_exclusion():
     lab[10:14, 30:34, 50:54] = 6               # rein : trajet urétéral jusqu'à la vessie
     (a, b), = ureter_paths(lab, sp)
     assert np.allclose(b, np.array([25, 30, 20]) * 2, atol=1)
+
+
+def curved_ureter():
+    """Fantôme (voxels de 4 mm) : rein droit en haut, vessie en bas, uretère courbe fixant (SUV 6) qui bombe en dehors
+    (x faibles) à mi-hauteur, à 48 mm de la droite rein -> vessie."""
+    z, y, x = np.mgrid[:70, :60, :70]
+    ball = lambda c, r: ((z - c[0]) ** 2 + (y - c[1]) ** 2 + (x - c[2]) ** 2) <= r ** 2
+    lab = np.zeros(z.shape, np.uint8)
+    lab[ball((60, 40, 20), 5)], lab[ball((8, 30, 35), 5)] = 6, 8
+    suv = np.ones(z.shape, np.float32)
+    suv[lab == 6], suv[lab == 8] = 10, 40
+    tube = np.zeros(z.shape, bool)
+    for k in range(10, 60):
+        t = (k - 8) / 52
+        tube[k] = (y[0] - 30 - 10 * t) ** 2 + (x[0] - 35 + 15 * t + 12 * np.sin(np.pi * t)) ** 2 <= 1.5 ** 2
+    tube &= lab == 0
+    suv[tube] = 6
+    return suv, lab, tube, ball
+
+
+def test_measure_at_excretion_follows_estimated_ureter_not_straight_line():
+    sp = (4.0, 4.0, 4.0)
+    suv, lab, tube, ball = curved_ureter()
+    on, far, line = (34, 35, 16), (34, 25, 16), (34, 35, 27)   # sur l'uretère ; à 40 mm de lui ; sur l'ancienne droite
+    suv[ball(on, 2)], suv[ball(far, 2)], suv[ball(line, 2)] = 8, 5, 5
+    old = ureter_paths(lab, sp)                                  # pas d'uretère estimé : droite rein -> vessie
+    assert len(old) == 1 and "excrétion possible" in measure_at(suv, sp, line, labels=lab, ureters=old)["flags"]
+    lab[tube] = 13
+    ure = ureter_paths(lab, sp)
+    assert len(ure) > 10 and np.allclose(ure[0][0], np.array([60, 40, 20]) * 4) and np.allclose(ure[-1][1], np.array([8, 30, 35]) * 4)
+    r = measure_at(suv, sp, on, labels=lab, ureters=ure)
+    assert r["suv_max"] == 8 and "excrétion possible" in r["flags"]
+    assert measure_at(suv, sp, far, labels=lab, ureters=ure)["flags"] == []
+    assert measure_at(suv, sp, line, labels=lab, ureters=ure)["flags"] == []   # près de la droite, loin du trajet courbe

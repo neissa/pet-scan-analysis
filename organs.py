@@ -3,13 +3,17 @@
 Orientation supposée : patient en décubitus dorsal, tête vers les z croissants, droite du patient vers les x faibles."""
 import numpy as np
 from scipy import ndimage
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra
 
 ORGANS = {  # id: (nom, couleur)
     1: ("Poumon droit", "#4aa3ff"), 2: ("Poumon gauche", "#4ad7ff"), 3: ("Cœur (approx.)", "#ff4a4a"),
     4: ("Foie", "#c8802a"), 5: ("Rate", "#a05ad8"), 6: ("Rein droit", "#2ecc71"), 7: ("Rein gauche", "#7dff7d"),
     8: ("Vessie", "#ffe14a"), 9: ("Cerveau", "#ff8fd0"), 10: ("Squelette", "#e8e8e8"),
     11: ("Aorte thoracique", "#ff6f00"), 12: ("Liquide libre (approx.)", "#3a6dff"),
+    13: ("Uretère droit (estimé)", "#e6c200"), 14: ("Uretère gauche (estimé)", "#fff07a"),
 }
+URETER = {6: 13, 7: 14}  # rein -> uretère estimé (ni exclu des mesures ni PHYSIO : seulement le drapeau « excrétion possible »)
 # fixation FDG physiologique exclue des mesures : cœur, reins, vessie, cerveau. Ni la rate, ni l'aorte, ni le liquide :
 # leur fixation est faible et une lésion à leur contact (périsplénique, ganglion para-aortique, péritoine) doit rester mesurée.
 PHYSIO = (3, 6, 7, 8, 9)
@@ -214,6 +218,15 @@ def segment_organs(suv, ct, spacing, step=2):
         if bl.sum() * vox_ml > 3:
             put(bl, 8)
 
+    # Uretères (estimés, approximatifs) : chemin de coût minimal rein -> vessie, tube d'environ 6 mm de rayon
+    zone = body & ~bone & (c > -200) & (c < 300)
+    for kid, oid in URETER.items():
+        path = trace_ureter(p, lab, (sz, sy, sx), kid, xmid, zone)
+        if path is not None:
+            tube = np.zeros(c.shape, bool)
+            tube[tuple(path.T)] = True
+            put(ndimage.binary_dilation(tube, iterations=int(6 // sx)) if 6 >= sx else tube, oid)
+
     # Liquide libre (ascite) : poches de densité liquide peu fixantes, sous les poumons, à plus de 25 mm de la peau (hors
     # paroi), hors organes. L'ouverture retire les interfaces graisse/muscle, dont la moyenne tombe aussi dans -10..25 HU.
     # Une poche de moins de 100 mL au contact du foie est la vésicule biliaire. Approximatif : une anse digestive
@@ -238,6 +251,64 @@ def segment_organs(suv, ct, spacing, step=2):
             info[oid] = {"nom": name, "couleur": color, "volume_ml": float(m.sum() * vox_ml), "suv_max": float(p[m].max()),
                          "suv_mean": float(p[m].mean()), "hu_mean": float(c[m].mean())}
     return _upsample(lab, suv.shape, step), info
+
+
+def trace_ureter(p, lab, spacing, kid, xmid, zone):
+    """Trajet APPROXIMATIF de l'uretère du rein `kid` (6 droit, 7 gauche) à la vessie (8) : chemin de coût minimal (Dijkstra,
+    26 voisins) du centre du rein au centre de la vessie, dans `zone` (corps hors os et air), hors autres organes, du côté
+    du rein (la vessie exceptée). Une fixation TEP tubulaire (composante hors organes
+    > 2 × le fond, longue d'au moins 40 mm, section moyenne < 3 cm² : urine dans l'uretère) coûte jusqu'à 10 fois moins ;
+    sans elle, le chemin suit à peu près la droite. Retourne les voxels du chemin (N, 3) ou None (rein ou vessie absents,
+    pas de chemin, chemin incohérent : plus de 2 fois la ligne droite) ; l'appelant garde alors la droite.
+    shortcut: une chaîne ganglionnaire allongée et fixante passe pour un uretère ; ni psoas ni bassinet repérés."""
+    if not (lab == kid).any() or not (lab == 8).any():
+        return None
+    sp = np.asarray(spacing, float)
+    a, b = (np.round(ndimage.center_of_mass(lab == k)).astype(int) for k in (kid, 8))
+    z0, z1 = max(0, min(a[0], b[0]) - 2), max(a[0], b[0]) + 3
+    X = np.arange(p.shape[2])[None, None, :]
+    side = (X <= xmid) if kid == 6 else (X >= xmid)  # le rachis lui-même est hors de `zone` (os)
+    ok = (zone & np.isin(lab, (0, 12, kid, 8)) & (side | (lab == 8)))[z0:z1]
+    a, b = a - (z0, 0, 0), b - (z0, 0, 0)
+    ok[tuple(a)] = ok[tuple(b)] = True
+    pb, lb = p[z0:z1], lab[z0:z1]
+    bg = float(np.median(pb[ok]))
+    hot = ok & np.isin(lb, (0, 12)) & (pb > 2 * bg)
+    L, n = ndimage.label(hot)
+    tub = np.zeros(hot.shape, bool)
+    for i, sl in enumerate(ndimage.find_objects(L), 1):
+        ext = max((s.stop - s.start) * d for s, d in zip(sl, sp))
+        m = L[sl] == i
+        if ext >= 40 and m.sum() * sp.prod() / ext < 300:
+            tub[sl] |= m
+    cost = np.where(tub, 1 / np.clip(pb / max(bg, 1e-3), 1, 10), 1.0)
+    idx = np.full(ok.shape, -1)
+    idx[ok] = np.arange(int(ok.sum()))
+    rows, cols, w = [], [], []
+    for d in np.ndindex(3, 3, 3):
+        d = np.array(d) - 1
+        if tuple(d) <= (0, 0, 0):  # chaque arête une fois (graphe non orienté)
+            continue
+        src = tuple(slice(max(0, -k), n - max(0, k)) for k, n in zip(d, ok.shape))
+        dst = tuple(slice(max(0, k), n - max(0, -k)) for k, n in zip(d, ok.shape))
+        A, B = idx[src], idx[dst]
+        m = (A >= 0) & (B >= 0)
+        rows.append(A[m])
+        cols.append(B[m])
+        w.append((cost[src][m] + cost[dst][m]) / 2 * float(np.linalg.norm(d * sp)))
+    N = int(ok.sum())
+    G = csr_matrix((np.concatenate(w), (np.concatenate(rows), np.concatenate(cols))), shape=(N, N))
+    ia, ib = int(idx[tuple(a)]), int(idx[tuple(b)])
+    dist, pred = dijkstra(G, directed=False, indices=ia, return_predecessors=True)
+    if not np.isfinite(dist[ib]):
+        return None
+    nodes = [ib]
+    while nodes[-1] != ia:
+        nodes.append(int(pred[nodes[-1]]))
+    path = np.argwhere(ok)[nodes]
+    if np.linalg.norm(np.diff(path, axis=0) * sp, axis=1).sum() > 2 * np.linalg.norm((b - a) * sp):
+        return None
+    return path + (z0, 0, 0)
 
 
 def _upsample(lab, shape, step):

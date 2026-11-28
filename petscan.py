@@ -10,7 +10,7 @@ import pydicom
 from scipy import ndimage, signal
 from scipy.spatial import ConvexHull
 
-from organs import ORGANS, PHYSIO, PHYSIO_MARGIN_MM
+from organs import ORGANS, PHYSIO, PHYSIO_MARGIN_MM, URETER
 
 
 def _seconds(tm):  # DICOM TM "HHMMSS[.ffffff]"
@@ -386,16 +386,34 @@ URINARY = (6, 7, 8)  # reins et vessie : l'urine excrétée y passe
 
 
 def ureter_paths(labels, spacing):
-    """Trajets urétéraux approximatifs : segments (mm) du centre de chaque rein au centre de la vessie.
-    shortcut: droite rein -> vessie, pas l'uretère réel ; à remplacer si l'uretère est un jour segmenté."""
-    boxes = ndimage.find_objects(labels, max_label=max(URINARY))
+    """Trajets urétéraux approximatifs : segments (mm) de chaque rein à la vessie. Uretère estimé par `segment_organs`
+    (étiquettes URETER, chemin de coût minimal CT + TEP) : polyligne de ses centres coupe par coupe, du centre du rein au
+    centre de la vessie ; sinon (pas de CT, chemin incohérent) droite du centre du rein au centre de la vessie.
+    shortcut: un centre par coupe suppose un uretère qui descend sans revenir sur lui-même."""
+    boxes = ndimage.find_objects(labels, max_label=max(URETER.values()))
     com = {}
     for oid in URINARY:
         sl = boxes[oid - 1]
         if sl is not None:
             c = ndimage.center_of_mass(labels[sl] == oid)
             com[oid] = np.array([(ci + s.start) * sp for ci, s, sp in zip(c, sl, spacing)])
-    return [(com[k], com[8]) for k in (6, 7) if k in com and 8 in com]
+    out = []
+    for k in (6, 7):
+        if k not in com or 8 not in com:
+            continue
+        sl = boxes[URETER[k] - 1]
+        if sl is None:
+            out.append((com[k], com[8]))
+            continue
+        z, y, x = np.nonzero(labels[sl] == URETER[k])
+        zs = np.unique(z)
+        pts = [np.array([(zz + sl[0].start) * spacing[0], (y[z == zz].mean() + sl[1].start) * spacing[1],
+                         (x[z == zz].mean() + sl[2].start) * spacing[2]]) for zz in zs]
+        if abs(com[k][0] - pts[-1][0]) < abs(com[k][0] - pts[0][0]):
+            pts = pts[::-1]  # du rein vers la vessie
+        pts = [com[k]] + pts + [com[8]]
+        out += list(zip(pts[:-1], pts[1:]))
+    return out
 
 
 def _seg_dist(p, a, b):
