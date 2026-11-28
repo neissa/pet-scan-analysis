@@ -386,6 +386,7 @@ def test_reference_map_follow_three_dates_excretion_new_fixation_and_deletion():
             assert l1["flags"] == [] and "excrétion possible" in l2["flags"] and l2["suv_max"] == 5.5  # urine écartée, lésion gardée
             assert f["score"] > 0.5 and f["method"].startswith("squelette") and f["warning"] is None  # même grille
             news = [n["peak"] for n in f["new"]]   # boule uniforme de rayon 2 : pic n'importe où dedans
+            assert f["new_total"] == len(news) and all("pertinence" in n for n in f["new"])
             assert len(news) == bool(extra) and all(max(abs(a - b - c) for a, b, c in zip(n, extra, d)) <= 2 for n in news), news
             assert _post(srv, "/ref/record", {"key": key}) == {"ok": True}
         assert _post(srv, "/ref/update", {"key": key, "op": "add", "vox": [40, 45, 30]})["ok"]   # ajout au point courant

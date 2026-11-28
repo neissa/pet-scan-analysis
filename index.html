@@ -147,6 +147,11 @@
   #ftbl td.ok { white-space: nowrap; } #ftbl button { padding: 0 5px; min-width: 0; min-height: 0; }   /* actions d'une lésion suivie */
   #dlist { overflow-wrap: anywhere; }
   td.up { color: var(--up); } td.down { color: var(--down); }   /* évolution d'un point de fixation : hausse / baisse */
+  /* indice de pertinence : nombre + classe écrite (la couleur ne porte pas seule l'information) */
+  td.rel { text-align: left; white-space: nowrap; } td.rel summary { cursor: pointer; list-style: none; } td.rel summary::-webkit-details-marker { display: none; }
+  td.rel b { display: inline-block; min-width: 2.2em; padding: 0 4px; border: 1px solid currentColor; border-radius: 4px; text-align: center; }
+  .rel-haute { color: var(--s3); } .rel-moyenne { color: var(--warn); } .rel-faible { color: var(--label-3); }
+  td.rel ul { margin: 2px 0 0; padding-left: 14px; color: var(--label-2); white-space: normal; min-width: 220px; }
   tr.excl td:not(.ok) { color: var(--label-3); text-decoration: line-through; }   /* point exclu (physiologique ou décoché) */
   #fcurves .curve { margin-top: 10px; } #fcurves svg { display: block; }
   #fcurves .lg { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
@@ -296,6 +301,7 @@
       <label class="row"><span>Favoris seulement (★)</span>
         <input id="favonly" type="checkbox"></label>
       <table id="tbl"></table>
+      <p class="note">Pertinence : indice heuristique 0–100 (réglé à la main, pas une probabilité calibrée ni un avis médical) ; cliquer sur l'indice pour le détail des critères.</p>
     </details>
 
     <details class="sec" id="followsec">
@@ -622,6 +628,7 @@ async function lesions() {
   if (!Array.isArray(r)) return;
   lesionList = r;
   percist = p;
+  if (lesFolder !== $("folder").value) { lesFolder = $("folder").value; lesSort = LES_SORT0; }  // nouvelle séance : tri par pertinence
   lesionList.forEach((l, i) => l.n = i + 1);  // « # » = rang par SUVmax décroissant, conservé quel que soit le tri
   renderLesions();
 }
@@ -651,9 +658,16 @@ function toggleValid(l) {
 }
 // Distance (mm) entre le curseur croisé (dernier point cliqué ou point de fixation choisi) et le pic, en tenant compte des décalages de A.
 const distTo = l => Math.hypot(...l.peak.map((p, k) => (p + off.A[k] - cur(["axial", "coronal", "sagittal"][k])) * spacing[k]));
-const LES_COLS =[["fav", "★"], ["ok", "✓"], ["n", "#"], ["dist", "Dist. mm"], ["sul_peak", "SULpeak"], ["sul_max", "SULmax"], ["suv_max", "SUVmax"], ["suv_mean", "SUVmean"], ["mtv_ml", "MTV ml"], ["tlg", "TLG"],
+const LES_COLS =[["fav", "★"], ["ok", "✓"], ["n", "#"], ["pertinence", "Pertinence"], ["dist", "Dist. mm"], ["sul_peak", "SULpeak"], ["sul_max", "SULmax"], ["suv_max", "SUVmax"], ["suv_mean", "SUVmean"], ["mtv_ml", "MTV ml"], ["tlg", "TLG"],
                   ["suv_b", "SUVmax B"], ["delta_pct", "Δ %"], ["organe", "Localisation"]];
-let lesSort = { key: "n", dir: 1 };  // dir : 1 croissant, -1 décroissant ; le tri est conservé quand le seuil ou les décalages changent
+// dir : 1 croissant, -1 décroissant ; le tri est conservé quand le seuil ou les décalages changent, remis à la pertinence décroissante à chaque séance
+const LES_SORT0 = { key: "pertinence", dir: -1 };
+let lesSort = LES_SORT0, lesFolder = null;
+// détail de l'indice : critères et points (infobulle et liste repliable)
+const relPts = c => `${c.nom}${c.valeur ? ` (${c.valeur})` : ""} : ${c.points > 0 ? "+" : ""}${c.points}`;
+const relCell = l => l.pertinence == null ? "<td>—</td>" : `<td class="rel rel-${l.pertinence_classe}"><details><summary title="${esc(
+  "Indice heuristique (pas une probabilité calibrée ni un avis médical)\n" + l.pertinence_detail.map(relPts).join("\n"))}"><b>${l.pertinence}</b> ${l.pertinence_classe}</summary>` +
+  `<ul>${l.pertinence_detail.map(c => `<li>${esc(relPts(c))}</li>`).join("")}</ul></details></td>`;
 function sortBy(k) {
   // 1er clic : le plus grand d'abord (sauf # et la localisation, par ordre alphabétique)
   lesSort = lesSort.key === k ? { key: k, dir: -lesSort.dir } : { key: k, dir: k === "n" || k === "organe" || k === "dist" ? 1 : -1 };
@@ -662,7 +676,7 @@ function sortBy(k) {
 function renderLesions() {
   const cc = lesionList.length && lesionList[0].suv_b !== undefined;  // séance B chargée : colonnes d'évolution
   const cols = LES_COLS.filter(([k]) => (cc || (k !== "suv_b" && k !== "delta_pct")) && (percist.sul !== false || k !== "sul_max"));  // repli SUV : SULmax = SUVmax
-  if (!cols.some(([k]) => k === lesSort.key)) lesSort = { key: "n", dir: 1 };  // colonne B disparue : tri par défaut
+  if (!cols.some(([k]) => k === lesSort.key)) lesSort = LES_SORT0;  // colonne B disparue : tri par défaut
   const { key, dir } = lesSort;
   const favs = favSet(), vals = valMap();
   lesionList.forEach(l => { l.fav = favs.has(favId(l)) ? 1 : 0; l.dist = distTo(l); l.ok = isValid(l, vals) ? 1 : 0; });
@@ -696,7 +710,7 @@ function renderLesions() {
       `aria-sort="${k === key ? (dir > 0 ? "ascending" : "descending") : "none"}">${t.replace("SUL", u)}${k === key ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") + "</tr>" +
     rows.map((l, i) => `<tr class="les${l.ok ? "" : " excl"}" data-i="${i}" tabindex="0" title="Aller à ce point de fixation"><td class="fav" role="button" aria-label="Favori" aria-pressed="${!!l.fav}" title="Ajouter ou retirer des favoris">${l.fav ? "★" : "☆"}</td>` +
       `<td class="ok"><input type="checkbox" aria-label="Retenir ce point (PERCIST)"${l.ok ? " checked" : ""} title="${l.physio ? `Au contact de ${esc(l.physio)} (fixation physiologique) : ses voxels et la marge autour sont déjà retirés. ` : ""}Coché : retenu dans les totaux ; décoché : exclu"></td>` +
-      `<td>${l.n}</td><td>${l.dist.toFixed(0)}</td><td>${l.sul_peak.toFixed(2)}</td>${percist.sul !== false ? `<td>${l.sul_max.toFixed(2)}</td>` : ""}<td>${l.suv_max.toFixed(2)}</td>` +
+      `<td>${l.n}</td>${relCell(l)}<td>${l.dist.toFixed(0)}</td><td>${l.sul_peak.toFixed(2)}</td>${percist.sul !== false ? `<td>${l.sul_max.toFixed(2)}</td>` : ""}<td>${l.suv_max.toFixed(2)}</td>` +
       `<td>${l.suv_mean.toFixed(2)}</td><td>${l.mtv_ml.toFixed(1)}</td><td>${l.tlg.toFixed(1)}</td>` +
       (cc ? `<td>${l.suv_b.toFixed(2)}</td>${evo(l)}` : "") + loc(l) + `</tr>`).join("");
   for (const th of $("tbl").querySelectorAll("th[data-k]")) {
@@ -707,9 +721,9 @@ function renderLesions() {
   for (const tr of $("tbl").querySelectorAll("tr.les")) {
     tr.onmouseenter = tr.onfocus = () => { hover = { z: rows[tr.dataset.i].peak[0], y: rows[tr.dataset.i].peak[1], x: rows[tr.dataset.i].peak[2] }; drawAll(); };
     tr.onmouseleave = tr.onblur = () => { hover = null; drawAll(); };
-    tr.onclick = e => e.target.closest("td.fav") ? toggleFav(rows[tr.dataset.i])
+    tr.onclick = e => e.target.closest("td.rel") ? null : e.target.closest("td.fav") ? toggleFav(rows[tr.dataset.i])
       : e.target.closest("td.ok") ? toggleValid(rows[tr.dataset.i]) : gotoLesion(rows[tr.dataset.i]);
-    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(e); } };
+    tr.onkeydown = e => { if ((e.key === "Enter" || e.key === " ") && !e.target.closest("td.rel")) { e.preventDefault(); tr.onclick(e); } };
   }
 }
 
@@ -1388,7 +1402,10 @@ function renderFollow() {
   $("fnew").replaceChildren(...(fres ? fres.new : []).map(n => {
     const row = document.createElement("div");
     row.className = "mrow";
-    row.append(`Nouvelle fixation : SUVmax ${n2(n.suv_max)}, SULpeak ${n2(n.sul_peak)}, ${n.vol_ml.toFixed(1)} ml` + (n.flags.length ? ` (⚠ ${n.flags.join(", ")})` : ""));
+    const rel = document.createElement("span");
+    rel.className = `rel-${n.pertinence_classe}`; rel.textContent = `pertinence ${n.pertinence} (${n.pertinence_classe})`;
+    rel.title = "Indice heuristique (pas une probabilité calibrée ni un avis médical)\n" + n.pertinence_detail.map(relPts).join("\n");
+    row.append(`Nouvelle fixation : `, rel, `, SUVmax ${n2(n.suv_max)}, SULpeak ${n2(n.sul_peak)}, ${n.vol_ml.toFixed(1)} ml` + (n.flags.length ? ` (⚠ ${n.flags.join(", ")})` : ""));
     for (const [t, f] of [["Voir", () => gotoLesion(n)], ["Valider", () => addLesion(n.peak)], ["Ignorer", () => { fres.new.splice(fres.new.indexOf(n), 1); renderFollow(); }]]) {
       const b = document.createElement("button"); b.textContent = t; b.onclick = f; row.append(" ", b);
     }
@@ -1410,7 +1427,7 @@ async function applyFollow(ask = true) {
     fkey = key; fres = r;
     $("frecord").disabled = r.date === r.ref_date;
     $("fmsg").textContent = `Recalage : ${r.method}, décalage (z ; y ; x) = ${r.shift_mm.map(v => String(v).replace(".", ",")).join(" ; ")} mm` +
-      (r.score != null ? `, corrélation du squelette ${n2(r.score)}` : "") + `. ${r.new.length} nouvelle(s) fixation(s) proposée(s) (≥ ${$("thr").value} SUV).` + (r.warning ? ` ⚠ ${r.warning}.` : "");
+      (r.score != null ? `, corrélation du squelette ${n2(r.score)}` : "") + `. ${r.new_total} nouvelle(s) fixation(s) détectée(s) (≥ ${$("thr").value} SUV), ${r.new.length} affichée(s) par pertinence décroissante.` + (r.warning ? ` ⚠ ${r.warning}.` : "");
     await showMap();
   } finally { $("fapply").disabled = false; }
 }
