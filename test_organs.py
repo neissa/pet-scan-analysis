@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
+from scipy import ndimage
 
-from organs import ORGANS, segment_organs
+from organs import ORGANS, segment_organs, trace_ureter
 
 
 def phantom():
@@ -149,6 +150,41 @@ def test_descending_aorta_and_blood_pool_reference():
     ref = blood_pool_reference(suv, lab, (4, 4, 4), 0.8)
     assert ref["mean"] == pytest.approx(1.8 * 0.8) and ref["seuil"] == pytest.approx(2 * ref["mean"] + 2 * ref["sd"])
     assert blood_pool_reference(suv, np.zeros_like(lab), (4, 4, 4)) is None
+
+
+def test_ureter_follows_curved_hot_tube_else_straight_or_none():
+    from test_store import curved_ureter
+    sp = (4.0, 4.0, 4.0)
+    suv, lab, tube, b3 = curved_ureter()
+    z, y, x = np.mgrid[:70, :60, :70]
+    body = (y - 30) ** 2 + (x - 35) ** 2 <= 28 ** 2
+    path = trace_ureter(suv, lab, sp, 6, 35, body)
+    on = [p for p in path if tube[p[0]].any() and lab[tuple(p)] == 0]   # hors rein et vessie
+    assert len(on) > 40 and all(np.min(np.abs(np.argwhere(tube[p[0]]) - p[1:]).sum(axis=1)) <= 1 for p in on)
+    flat = trace_ureter(np.ones_like(suv), lab, sp, 6, 35, body)   # sans fixation : à peu près la droite
+    assert np.linalg.norm(np.diff(flat, axis=0) * 4, axis=1).sum() < 1.2 * np.linalg.norm((flat[0] - flat[-1]) * 4)
+    assert trace_ureter(suv, lab, sp, 7, 35, body) is None          # pas de rein gauche
+    # seul couloir possible : une hélice de 3 tours, plus de 2 fois la ligne droite -> chemin incohérent, repli
+    t = np.linspace(0, 1, 2000)
+    hx = np.round(np.stack([8 + 52 * t, 35 + 8 * np.sin(6 * np.pi * t), 18 + 8 * np.cos(6 * np.pi * t)], 1)).astype(int)
+    helix = np.zeros(body.shape, bool)
+    helix[tuple(hx.T)] = True
+    lab2 = np.zeros_like(lab)
+    lab2[b3(hx[-1], 3)], lab2[b3(hx[0], 3)] = 6, 8
+    zone = ndimage.binary_dilation(helix) | (lab2 > 0)
+    assert trace_ureter(suv, lab2, sp, 6, 35, zone) is None
+
+
+def test_segment_organs_adds_estimated_ureter_between_kidney_and_bladder():
+    suv, ct = abdo_phantom()
+    kidney, pelvis, bladder = ball((12, 45, 20), (9, 6, 5)), ball((12, 45, 20), (5, 3, 2)), ball((3, 35, 38), 3)
+    ct[kidney], suv[kidney] = 180, 2.5
+    ct[pelvis], suv[pelvis] = 10, 10.0
+    ct[bladder], suv[bladder] = 20, 40.0
+    lab, info = segment_organs(suv, ct, (4, 4, 4), step=1)
+    assert {6, 8, 13} <= set(info) and 14 not in info and info[13]["nom"] == "Uretère droit (estimé)"
+    ct[bladder] = -1000                    # sans vessie : pas d'uretère estimé
+    assert 13 not in segment_organs(suv, ct, (4, 4, 4), step=1)[1]
 
 
 @pytest.mark.parametrize("hu", [115, 55])
