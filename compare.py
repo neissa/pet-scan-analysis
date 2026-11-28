@@ -1,5 +1,6 @@
-"""Recalage de deux séances d'un même patient (même grille TEP, positions sur la table différentes).
-Translation entière estimée par corrélation croisée (FFT) du squelette vu au CT ; pas de rotation ni de déformation."""
+"""Recalage de deux séances d'un même patient (positions sur la table différentes).
+Translation entière estimée par corrélation croisée (FFT) du squelette vu au CT ; pas de rotation ni de déformation.
+Grilles d'espacements différents : `resample` ramène un volume sur l'espacement de l'autre avant le recalage."""
 import numpy as np
 from scipy import ndimage
 from scipy.signal import fftconvolve
@@ -36,6 +37,20 @@ def shift_volume(vol, d, shape, fill=0):
         src.append(slice(a + k, b + k))
     out[tuple(dst)] = vol[tuple(src)]
     return out
+
+
+def same_grid(sp_a, sp_b, tol=0.005):
+    """Espacements égaux à tol près (relatif) : pas de rééchantillonnage (1,37 contre 1,35 mm dérive déjà de 4 voxels sur 300)."""
+    return all(abs(a - b) <= tol * a for a, b in zip(sp_a, sp_b))
+
+
+def resample(vol, spacing, new_spacing, order=1, fill=0):
+    """Volume sur une grille de même origine (centre du voxel 0, position DICOM inchangée) et d'espacement new_spacing (mm),
+    couvrant la même étendue : out[i] = vol(i * new_spacing / spacing). order 1 = linéaire (TEP, CT), 0 = plus proche voisin
+    (étiquettes) ; fill hors du volume. Indice de grille d'origine v -> nouvelle grille v * spacing / new_spacing."""
+    r = [t / s for s, t in zip(spacing, new_spacing)]
+    shape = tuple(int(np.floor((n - 1) / k + 1e-6)) + 1 for n, k in zip(vol.shape, r))
+    return ndimage.affine_transform(vol, r, output_shape=shape, order=order, mode="constant", cval=fill)
 
 
 def _crop(vol, lo, hi, fill):

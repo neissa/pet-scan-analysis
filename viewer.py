@@ -24,7 +24,7 @@ from scipy import ndimage
 
 import methods
 import store
-from compare import estimate_shift, refine_shift, shift_volume
+from compare import estimate_shift, refine_shift, resample, same_grid, shift_volume
 from export_pdf import build_pdf
 from organs import ORGANS, segment_organs
 from patient import read_patient_info, read_sul
@@ -307,18 +307,23 @@ def local_shift(ct_ref, ctv, shift, vox, spacing):
     return tuple(a + b for a, b in zip(d, e)) if sc >= 0.5 else d
 
 
-def track(m, suv, spacing, factor=1.0, labels=None, shift=(0, 0, 0), ct_ref=None, ctv=None, thr=None, vmin=0.1, cache=None):
+def track(m, suv, spacing, factor=1.0, labels=None, shift=(0, 0, 0), ct_ref=None, ctv=None, thr=None, vmin=0.1, cache=None,
+          ref_spacing=None):
     """Mesure chaque lésion de la carte `m` à sa position mémorisée (indice de référence + décalage global `shift`, raffiné
     par lésion sur le squelette du CT à ±15 mm si les deux CT sont là), sans re-détection par seuil (`measure_at`).
     thr : propose aussi les nouvelles fixations (points >= thr d'au moins vmin ml, loin de toute lésion suivie).
-    cache : {id: décalage raffiné}, réutilisé d'un appel à l'autre. Retourne ({id: mesure ou None hors champ}, [nouvelles])."""
+    cache : {id: décalage raffiné}, réutilisé d'un appel à l'autre. ref_spacing : espacement de la grille de la référence s'il
+    diffère (positions converties en mm sur l'espacement de cette séance, ct_ref déjà `resample`-é ; SUV mesurées sur la
+    grille native, jamais interpolées). Retourne ({id: mesure ou None hors champ}, [nouvelles])."""
     ure = ureter_paths(labels, spacing) if labels is not None else []
     cache = {} if cache is None else cache
     rows = {}
+    k = [a / b for a, b in zip(ref_spacing or spacing, spacing)]
     for les in m["lesions"]:
+        vox = [v * s for v, s in zip(les["vox"], k)]
         if les["id"] not in cache:
-            cache[les["id"]] = local_shift(ct_ref, ctv, shift, les["vox"], spacing)
-        r = _with_ct(measure_at(suv, spacing, [v + k for v, k in zip(les["vox"], cache[les["id"]])], factor, labels, ure), ctv, spacing)
+            cache[les["id"]] = local_shift(ct_ref, ctv, shift, vox, spacing)
+        r = _with_ct(measure_at(suv, spacing, [v + d for v, d in zip(vox, cache[les["id"]])], factor, labels, ure), ctv, spacing)
         if r:
             r["shift"] = [int(v) for v in cache[les["id"]]]
         rows[les["id"]] = r
@@ -393,13 +398,12 @@ class State:
             self._ref = (key, liver_reference(suv, labels, spacing, self.sul["factor"]))
         return self._ref[1]
 
-    def ref_ct(self, folder, spacing):
-        """CT de la séance de référence sur sa grille TEP, relu depuis son dossier puis gardé ; None si absent ou grille différente."""
+    def ref_ct(self, folder):
+        """CT de la séance de référence sur sa grille TEP, relu depuis son dossier puis gardé ; None si absent."""
         if self._refct[0] != folder:
             try:
                 suv, sp, origin = load_suv(folder)
-                ok = all(abs(a - b) <= 0.1 * a for a, b in zip(spacing, sp))
-                self._refct = (folder, load_ct(folder, suv.shape, sp, origin) if ok else None)
+                self._refct = (folder, load_ct(folder, suv.shape, sp, origin))
             except (Exception, SystemExit):  # dossier déplacé ou sans TEP : suivi sans CT de référence
                 self._refct = (folder, None)
         return self._refct[1]
@@ -819,12 +823,16 @@ def make_handler(state):
             if err:
                 return {"error": err}
             f = state.follow
+            sp_ref = tuple(m.get("spacing") or spacing)
+            regrid = not same_grid(sp_ref, spacing)
             if not (f and f["key"] == key and f["vol"] is suv):  # recalage global une seule fois par séance et par référence
                 ct_ref = None
                 if date == m["ref_date"]:
                     shift, score, method = (0, 0, 0), None, "séance de référence"
                 else:
-                    ct_ref = state.ref_ct(m["folder"], spacing) if ctv is not None and m.get("folder") else None
+                    ct_ref = state.ref_ct(m["folder"]) if ctv is not None and m.get("folder") else None
+                    if ct_ref is not None and regrid:  # CT de référence ramené à l'espacement de cette séance (même origine)
+                        ct_ref = resample(ct_ref, sp_ref, spacing, order=1, fill=-1000)
                     if ct_ref is not None:
                         shift, score = estimate_shift(ct_ref, ctv)
                         method = "squelette (CT)"
@@ -834,9 +842,14 @@ def make_handler(state):
                         method = "coordonnées DICOM (CT de référence indisponible)"
                 f = state.follow = {"key": key, "vol": suv, "shift": tuple(int(s) for s in shift), "score": score, "method": method,
                                     "ct_ref": ct_ref, "cache": {}}
-            rows, new = track(m, suv, spacing, state.sul["factor"], labels, f["shift"], f["ct_ref"], ctv, thr, vmin, f["cache"])
+            rows, new = track(m, suv, spacing, state.sul["factor"], labels, f["shift"], f["ct_ref"], ctv, thr, vmin, f["cache"],
+                              sp_ref if regrid else None)
             f["rows"], f["date"] = rows, date
-            return {"date": date, "ref_date": m["ref_date"], "shift_mm": [round(s * v, 1) for s, v in zip(f["shift"], spacing)],
+            mm = lambda sp: " × ".join(f"{v:.2f}".replace(".", ",") for v in sp)
+            warn = (f"Grille différente de la référence ({mm(sp_ref)} → {mm(spacing)} mm) : CT de référence rééchantillonné "
+                    "(linéaire) pour le recalage et positions converties en mm ; SUV mesurées sur la grille native de cette séance "
+                    "(non interpolées), mais SUVmax et volume dépendent de la taille du voxel (volume partiel)") if regrid else None
+            return {"warning": warn, "date": date, "ref_date": m["ref_date"], "shift_mm": [round(s * v, 1) for s, v in zip(f["shift"], spacing)],
                     "score": f["score"], "method": f["method"], "unit": state.sul["unit"], "new": new,
                     "rows": {k: r and {**_vals(r), "peak": r["peak"], "shift": r["shift"]} for k, r in rows.items()}}
 
@@ -911,7 +924,7 @@ def make_handler(state):
                     return {"error": "Cette séance est la référence : ses valeurs sont déjà enregistrées"}
                 if not followed:
                     return {"error": "Appliquez d'abord le suivi à cette séance"}
-                m["dates"][date] = {"shift": list(f["shift"]), "score": f["score"], "values": {k: _vals(r) for k, r in f["rows"].items()},
+                m["dates"][date] = {"shift": list(f["shift"]), "score": f["score"], "spacing": list(spacing), "values": {k: _vals(r) for k, r in f["rows"].items()},
                                  **self._cond(vol, labels)}
             elif req["op"] == "add":  # point courant de la séance affichée (clic, ou nouvelle fixation validée)
                 cur = [int(v) for v in req["vox"]]
@@ -923,12 +936,12 @@ def make_handler(state):
                         return {"error": "Point hors du volume"}
                     les["vox"] = r["peak"]
                     m["dates"][date]["values"][lid] = _vals(r)
-                elif followed:  # ramené dans le repère de la référence (décalage raffiné autour du point)
+                elif followed:  # ramené dans le repère de la référence (décalage raffiné autour du point, puis grille de la référence)
                     d = local_shift(f["ct_ref"], ctv, f["shift"], [c - s for c, s in zip(cur, f["shift"])], spacing)
-                    les["vox"] = [c - s for c, s in zip(cur, d)]
+                    les["vox"] = [int(round((c - s) * b / a)) for c, s, a, b in zip(cur, d, m.get("spacing") or spacing, spacing)]
                 else:
                     return {"error": "Appliquez d'abord le suivi à cette séance"}
-                les["mm"] = to_mm(les["vox"], m.get("origin"), spacing)
+                les["mm"] = to_mm(les["vox"], m.get("origin"), m.get("spacing") or spacing)
                 m["lesions"].append(les)
             elif req["op"] == "pe_non_cible":  # RECIST : progression sans équivoque des non-cibles, jugée par le lecteur
                 m["dates"][req["date"]]["pe_non_cible"] = bool(req["value"])
