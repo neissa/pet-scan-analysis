@@ -48,6 +48,7 @@ pytest -q
 - **Favoris** : étoile pour garder des points et y revenir.
 - **Survol** : un anneau sur les trois vues repère la lésion survolée dans le tableau.
 - **Localisation** : organe dans ou près duquel se trouve le point.
+- **PERCIST** : SUL (masse maigre, James ; repli SUV poids signalé sans taille ni sexe), SULpeak (sphère de 1 cm³) et SULmax par lésion, référence foie (sphère de 3 cm placée automatiquement, moyenne ± écart-type, seuil 1,5 × moy. + 2 σ), lésions près de la vessie, des reins, du cerveau ou du cœur exclues par défaut, case « retenir » par ligne et totaux MTV / TLG des lésions retenues.
 
 ### Mesures
 - **Règle** : distance en mm sur 2 clics, recalculée en direct.
@@ -105,5 +106,5 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 - **Android** : un examen réel demande beaucoup de RAM ; lecture DICOM séquentielle (plus lente) ; export PDF non testé dans la WebView ; APK de debug non signé ; carte SD non testée.
 - **Mesure** : le seuil fixe capte aussi les fixations physiologiques (cerveau, cœur, vessie, reins) ; segmentation d'organes heuristique.
 - **Comparaison** : translation seule (pas de rotation ni de déformation) ; SUV comparables seulement si dose, poids, incorporation et machine sont proches.
-- **Absent** : SUL / SUV lean body mass, SUVpeak, DICOM multi-séries.
+- **Absent** : DICOM multi-séries.
 - Ne committez jamais de DICOM (`.gitignore` les exclut).

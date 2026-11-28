@@ -25,9 +25,9 @@ from scipy import ndimage
 from compare import estimate_shift, refine_shift, shift_volume
 from export_pdf import build_pdf
 from organs import ORGANS, segment_organs
-from patient import read_patient_info
-from petscan import (_scaled, analyze, ct_choices, ct_series, default_ct_uid, load_ct, load_suv, measure_region,
-                     measure_tolerance)
+from patient import read_patient_info, read_sul
+from petscan import (_scaled, analyze, ct_choices, ct_series, default_ct_uid, liver_reference, load_ct, load_suv,
+                     measure_region, measure_tolerance, sul_info)
 
 AXIS = {"axial": 0, "coronal": 1, "sagittal": 2}
 CONFIG = Path(os.environ.get("PETSCAN_CONFIG") or Path.home() / ".pet-scan-analysis.json")  # PETSCAN_CONFIG : appli Android ; dossiers récents, dans le dossier utilisateur (jamais dans le repo)
@@ -322,7 +322,9 @@ class State:
         self.progress = self.cmp_progress = None  # avancement 0..1 du chargement en cours (None = inconnu)
         self._lock = threading.Lock()
 
-    def set(self, suv, spacing, ctv, patient=None, folder=""):
+    def set(self, suv, spacing, ctv, patient=None, folder="", sul=None):
+        self.sul = sul or sul_info(None, None, None)  # facteur SUV -> SUL ; repli SUV poids sans taille ni sexe
+        self._ref = (None, None)  # (clé, référence foie PERCIST) calculée à la demande
         self.organs = self.mips = self.cts = self.cmp = None
         self.cmp_status, self.cmp_message = "idle", ""
         self._ctcache, self._orgcache = {}, {}
@@ -473,13 +475,13 @@ class State:
             series = ct_series(folder, _scaled(self._set_progress, 0.45, 0.6))
             uid = default_ct_uid(series, origin) if series else None
             ctv = load_ct(folder, suv.shape, spacing, origin, uid, series, _scaled(self._set_progress, 0.6, 1))
-            patient = read_patient_info(folder)
+            patient, sul = read_patient_info(folder), read_sul(folder)
         except SystemExit as e:  # `load_suv` signale « aucune série PET » par SystemExit : ne pas tuer le serveur
             self.status, self.message = "error", str(e)
         except Exception as e:
             self.status, self.message = "error", f"{type(e).__name__} : {e}"
         else:
-            self.set(suv, spacing, ctv, patient, folder)
+            self.set(suv, spacing, ctv, patient, folder, sul)
             if series:
                 self.cts = {"series": series, "origin": origin, "choices": ct_choices(series, origin), "uid": uid}
                 self._ctcache[uid] = ctv
@@ -605,13 +607,28 @@ def make_handler(state):
                 if u.path == "/patient":
                     return self._json(patient)
                 if u.path == "/lesions":
-                    les = analyze(suv, float(np.prod(spacing)) / 1000, float(q["thr"]))
-                    org = state.organs  # organes pas encore calculés : pas de champ « organe », l'interface relance /lesions
+                    org = state.organs  # organes pas encore calculés : pas de champs « organe » ni « physio », l'interface relance /lesions
+                    les = analyze(suv, float(np.prod(spacing)) / 1000, float(q["thr"]), spacing, state.sul["factor"],
+                                  org[0] if org is not None else None)
                     if org is not None:
                         for lesion in les:
                             lesion["organe"] = _organ_at_peak(org[0], spacing, lesion["peak"])
                     rel =tuple(b - a for a, b in zip(self._off(q, "oa"), self._off(q, "ob")))  # B relativement à A
                     return self._json(_add_b(les, state.cmp["suv"], spacing, rel=rel) if state.cmp else les)
+                if u.path == "/percist":  # unité (SUL ou repli SUV) et référence hépatique ; les lésions restent dans /lesions
+                    org, si = state.organs, state.sul
+                    ref, msg = None, ("Référence foie indisponible : pas de CT" if ctv is None
+                                      else "Référence foie : en attente des organes…" if org is None else "")
+                    if org is not None:
+                        key = (id(org[0]), id(suv), si["factor"])
+                        if state._ref[0] != key:
+                            try:
+                                state._ref = (key, liver_reference(suv, org[0], spacing, si["factor"]))
+                            except Exception as e:
+                                return self._json({"error": f"Référence foie : {type(e).__name__} : {e}"})
+                        ref = state._ref[1]
+                        msg = "" if ref else "Référence foie indisponible : foie introuvable ou trop petit"
+                    return self._json({**si, "ref": ref, "ref_msg": msg, "computing": ctv is not None and org is None})
                 if u.path == "/img":
                     cmap, mode = q.get("cmap", "jet"), q.get("mode", "pet")
                     z = float(q.get("z", 1))

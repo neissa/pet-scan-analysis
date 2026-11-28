@@ -9,6 +9,7 @@ ORGANS = {  # id: (nom, couleur)
     4: ("Foie", "#c8802a"), 5: ("Rate", "#a05ad8"), 6: ("Rein droit", "#2ecc71"), 7: ("Rein gauche", "#7dff7d"),
     8: ("Vessie", "#ffe14a"), 9: ("Cerveau", "#ff8fd0"), 10: ("Squelette", "#e8e8e8"),
 }
+PHYSIO = (3, 6, 7, 8, 9)  # fixation FDG physiologique : cœur, reins, vessie, cerveau
 
 
 def _largest(mask):

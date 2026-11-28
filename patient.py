@@ -1,6 +1,6 @@
 """Infos patient/examen lues dans les en-têtes DICOM de la série PET.
 Affichage local uniquement : jamais écrites sur disque ni journalisées."""
-from petscan import _scan, _seconds
+from petscan import _scan, _seconds, sul_info
 
 AGE_UNITS = {"Y": "ans", "M": "mois", "W": "sem.", "D": "j"}
 SEX = {"M": "Homme", "F": "Femme", "O": "Autre"}
@@ -64,3 +64,10 @@ def read_patient_info(folder):
     """Infos de la plus grande série PET du dossier (même règle que `load_suv`) ; {} s'il n'y en a pas."""
     series = _scan(folder, "PT")
     return patient_info([h for _, h in max(series.values(), key=len)]) if series else {}
+
+
+def read_sul(folder):
+    """`petscan.sul_info` d'après poids, taille et sexe des en-têtes de la plus grande série PET (repli SUV poids s'ils manquent)."""
+    series = _scan(folder, "PT")
+    h = max(series.values(), key=len)[0][1] if series else {}
+    return sul_info(h.get("PatientWeight"), h.get("PatientSize"), h.get("PatientSex"))

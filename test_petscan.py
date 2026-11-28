@@ -85,3 +85,67 @@ def test_n_workers_sequential_on_android(monkeypatch):
     from petscan import n_workers
     monkeypatch.setenv("ANDROID_DATA", "/data")  # présent dans l'environnement de toute appli Android
     assert n_workers() == 1
+
+
+def test_lbm_james_reference_values_and_sul_fallback():
+    from petscan import lbm_james, sul_info
+    # calculs à la main : 1.10·80 − 128·(80/180)² = 88 − 25.28395 ; 1.07·60 − 148·(60/165)² = 64.2 − 19.57025
+    assert lbm_james(80, 1.80, "M") == pytest.approx(62.71605, abs=1e-4)
+    assert lbm_james(60, 1.65, "F") == pytest.approx(44.62975, abs=1e-4)
+    s = sul_info(80, 1.80, "M")
+    assert s["sul"] and s["unit"] == "SUL" and s["factor"] == pytest.approx(62.71605 / 80, abs=1e-6)
+    for w, h, sex in [(70, None, "M"), (70, "", "F"), (70, 1.7, "O"), (70, 1.7, None), (0, 1.7, "M"), (70, 170, "M")]:
+        f = sul_info(w, h, sex)  # taille absente, en cm, sexe inconnu, poids nul : repli SUV poids signalé, sans planter
+        assert f["sul"] is False and f["factor"] == 1.0 and f["unit"] == "SUV" and "indisponible" in f["label"]
+
+
+def _phantom():
+    """Fantôme (z,y,x) anisotrope : foie homogène SUV 2 avec une métastase, lésion sphérique SUV 8 avec un voxel à 20,
+    vessie très captante et une lésion proche de la vessie, une lésion isolée loin de tout."""
+    sp = (3.0, 2.0, 2.0)
+    z, y, x = np.mgrid[:60, :100, :100]
+    mm = lambda c: ((z - c[0]) * sp[0]) ** 2 + ((y - c[1]) * sp[1]) ** 2 + ((x - c[2]) * sp[2]) ** 2
+    suv = np.full(z.shape, 1.0, np.float32)
+    lab = np.zeros(z.shape, np.uint8)
+    lab[5:35, 5:55, 5:55] = 4                    # foie : 90 × 100 × 100 mm
+    suv[lab == 4] = 2.0
+    suv[mm((10, 30, 30)) <= 36] = 6.0            # métastase hépatique (r 6 mm) : la sphère de référence doit l'éviter
+    suv[mm((45, 75, 75)) <= 144] = 8.0           # lésion r 12 mm
+    suv[45, 75, 75] = 20.0
+    lab[mm((45, 30, 80)) <= 100] = 8             # vessie r 10 mm
+    suv[lab == 8] = 15.0
+    suv[mm((45, 30, 89)) <= 16] = 5.0            # lésion à 4 mm du bord de la vessie, séparée d'elle par un voxel de SUV 1
+    suv[mm((50, 90, 20)) <= 16] = 4.0            # lésion isolée
+    return suv, sp, lab
+
+
+def test_sul_peak_physio_and_liver_reference():
+    from petscan import PEAK_R_MM, _sphere, liver_reference
+    suv, sp, lab = _phantom()
+    f = 0.75
+    les = analyze(suv, float(np.prod(sp)) / 1000, 2.5, sp, f, lab, margin_mm=10)
+    big = next(l for l in les if l["suv_max"] == 20.0)
+    w = _sphere(PEAK_R_MM, sp, sub=5)             # poids des voxels (volume partiel)
+    assert w.sum() * 12 == pytest.approx(1000, rel=0.03) and w[tuple(n // 2 for n in w.shape)] == 1   # 1 cm³ à 3 % près
+    # boule centrée sur le voxel à 20, tous ses autres voxels à 8 : moyenne pondérée = 8 + 12 / somme des poids
+    assert big["sul_peak"] == pytest.approx(f * (8 + 12 / w.sum()), rel=1e-5)   # ni le max ni la moyenne
+    assert big["sul_max"] == pytest.approx(20 * f) and big["tlg_sul"] == pytest.approx(f * big["tlg"])
+    assert big["physio"] is None and big["valide"] is True
+    bladder = next(l for l in les if l["suv_max"] == 15.0)
+    near = next(l for l in les if l["suv_max"] == 5.0)
+    assert bladder["physio"] == "Vessie" and near["physio"] == "Vessie" and near["valide"] is False
+    assert next(l for l in les if l["suv_max"] == 4.0)["physio"] is None
+    assert next(l for l in les if l["suv_max"] == 6.0)["physio"] is None   # foie : pas une fixation physiologique exclue
+    assert "physio" not in analyze(suv, 0.012, 2.5, sp, f)[0]               # sans organes : champ absent
+    ref = liver_reference(suv, lab, sp, f)
+    assert ref["mean"] == pytest.approx(2.0 * f) and ref["sd"] == pytest.approx(0, abs=1e-6)
+    assert ref["seuil"] == pytest.approx(1.5 * ref["mean"] + 2 * ref["sd"])
+    c = np.array(ref["centre"])
+    assert lab[tuple(c)] == 4 and np.sqrt((((c - (10, 30, 30)) * sp) ** 2).sum()) > 15 + 6   # boule hors de la métastase
+    noisy = suv + np.where(np.indices(suv.shape).sum(0) % 2, 0.1, -0.1).astype(np.float32)   # damier ±0.1 : écart-type 0.1
+    r2 = liver_reference(noisy, lab, sp, 1.0)
+    assert r2["sd"] == pytest.approx(0.1, rel=0.05) and r2["seuil"] == pytest.approx(1.5 * r2["mean"] + 0.2, rel=0.01)
+    assert liver_reference(suv, np.zeros_like(lab), sp) is None                # foie introuvable
+    small = np.zeros_like(lab)
+    small[20:26, 40:50, 40:50] = 4
+    assert liver_reference(suv, small, sp) is None                             # trop petit pour une boule de 3 cm

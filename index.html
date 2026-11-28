@@ -127,6 +127,8 @@
   .cbar img { display: block; width: 100%; height: 12px; border-radius: 3px; }
   .cbar div { display: flex; justify-content: space-between; color: var(--label-3); font-size: 12px; font-variant-numeric: tabular-nums; }
   #glob { display: block; margin-top: 8px; color: var(--label-2); }
+  .mrow { display: flex; justify-content: space-between; align-items: center; gap: 6px; min-height: 28px; }
+  .mrow .x { flex: none; min-width: 0; min-height: 0; height: 16px; padding: 0 6px; font-size: 12px; line-height: 14px; }
   #res { margin-top: 8px; color: var(--res); white-space: pre-line; font-size: 12px; min-height: 1.4em; font-variant-numeric: tabular-nums; }
   .warn { color: var(--warn); font-size: 12px; margin: 4px 0; }
   .note { color: var(--label-3); font-size: 12px; margin: 16px 0 0; }
@@ -135,8 +137,10 @@
   td, th { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); }
   th { color: var(--label-2); }
   td:first-child, th:first-child, td.loc, th.loc { text-align: left; }
+  td.ok { text-align: center; } td.ok input { margin: 0; }
   details.subsec { margin-top: 8px; } details.subsec > summary { cursor: pointer; min-height: 28px; display: flex; align-items: center; color: var(--label-2); }
   td.up { color: var(--up); } td.down { color: var(--down); }   /* évolution d'un point de fixation : hausse / baisse */
+  tr.excl td:not(.ok) { color: var(--label-3); text-decoration: line-through; }   /* point exclu (physiologique ou décoché) */
   th[data-k] { cursor: pointer; user-select: none; white-space: nowrap; } th[data-k]:hover { color: var(--label); }
   tr.les { cursor: pointer; }
   tr.les:hover td, tr.les:focus-visible td { background: var(--surface-2); }
@@ -276,6 +280,7 @@
       <label class="row" title="Masque les points plus petits (bruit : quelques voxels isolés)"><span>Volume minimum (ml)</span>
         <input id="volmin" type="number" value="0.1" step="0.1" min="0"><button type="button" class="step" data-for="volmin" data-d="-1" aria-label="Diminuer" title="Diminuer (maintenir : répéter)">−</button><button type="button" class="step" data-for="volmin" data-d="1" aria-label="Augmenter" title="Augmenter (maintenir : répéter)">+</button></label>
       <p class="note" id="lescount"></p>
+      <div id="percist" class="row" role="status"></div>
       <label class="row"><span>Favoris seulement (★)</span>
         <input id="favonly" type="checkbox"></label>
       <table id="tbl"></table>
@@ -337,7 +342,15 @@ const mmDist = (v, a, b) => { const [W, H] = mmSize(v); return Math.hypot((b[0] 
 // fractions de l'image affichée (zoomée) <-> fractions de l'image entière
 const toFull = (v, fx, fy) => [zoom[v].x0 + fx / zoom[v].z, zoom[v].y0 + fy / zoom[v].z];
 const toView = (v, X, Y) => [(X - zoom[v].x0) * zoom[v].z, (Y - zoom[v].y0) * zoom[v].z];
-const showRes = extra => $("res").textContent = [...ms.map(m => m.text), extra].filter(Boolean).join("\n");
+// une ligne par mesure, avec « × » pour la supprimer ; `extra` : consigne en cours (ex. règle)
+const showRes = extra => $("res").replaceChildren(...ms.map(m => {
+  const row = document.createElement("div"), x = document.createElement("button");
+  row.className = "mrow"; row.append(m.text);
+  x.className = "x"; x.textContent = "×"; x.title = "Supprimer cette mesure"; x.setAttribute("aria-label", x.title);
+  x.onclick = () => { ms.splice(ms.indexOf(m), 1); showRes(); drawAll(); };
+  row.append(x);
+  return row;
+}), ...(extra ? [Object.assign(document.createElement("div"), { textContent: extra })] : []));
 const drawAll = () => views.forEach(([v]) => draw(v));
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
@@ -455,7 +468,7 @@ function drawCell(v, r) {
     if (it.t === "dots") { g.fillStyle = it.color; for (const p of it.pts) { const [x, y] = P(p); g.fillRect(x - 1, y - 1, 2, 2); } }
     else if (it.t === "dot") dot(it.p, it.color);
     else {
-      g.globalAlpha = it.bars ? .6 : 1;  // règle : un peu transparente, sans pastilles aux extrémités
+      g.globalAlpha = it.bars ? .85 : 1;  // règle : à peine transparente, sans pastilles aux extrémités
       g.strokeStyle = it.color; g.beginPath(); g.moveTo(...P(it.a)); g.lineTo(...P(it.b)); g.stroke();
       if (it.bars) bars(it.a, it.b, it.color);
       else { dot(it.a, it.color); dot(it.b, it.color); }
@@ -550,10 +563,13 @@ async function lesions() {
   if (!isFinite(parseFloat($("thr").value))) return;  // champ vide ou en cours de saisie
   const my = ++lesTok;  // une réponse plus ancienne ne doit pas écraser une plus récente
   $("tbl").style.opacity = .5;
-  const r = await (await fetch(`/lesions?thr=${$("thr").value}&oa=${offParam("A")}&ob=${offParam("B")}`)).json();
+  const [r, p] = await Promise.all([fetch(`/lesions?thr=${$("thr").value}&oa=${offParam("A")}&ob=${offParam("B")}`).then(x => x.json()),
+                                    fetch("/percist").then(x => x.json())]);
   if (my !== lesTok) return;
   $("tbl").style.opacity = 1;
+  if (!Array.isArray(r)) return;
   lesionList = r;
+  percist = p;
   lesionList.forEach((l, i) => l.n = i + 1);  // « # » = rang par SUVmax décroissant, conservé quel que soit le tri
   renderLesions();
 }
@@ -569,9 +585,21 @@ function toggleFav(l) {
   localStorage.setItem(favKey(), JSON.stringify([...s]));
   renderLesions();
 }
+// Validation PERCIST : par défaut, un point proche d'un organe à fixation physiologique est exclu (valide = false) ;
+// le choix de l'utilisateur, mémorisé comme les favoris, l'emporte. Champ valide absent (organes pas encore calculés) : retenu.
+let percist = {};
+const valKey = () => "val:" + $("folder").value.trim();
+const valMap = () => JSON.parse(localStorage.getItem(valKey()) || "{}");
+const isValid = (l, m = valMap()) => m[favId(l)] ?? l.valide ?? true;
+function toggleValid(l) {
+  const m = valMap();
+  m[favId(l)] = !isValid(l, m);
+  localStorage.setItem(valKey(), JSON.stringify(m));
+  renderLesions();
+}
 // Distance (mm) entre le curseur croisé (dernier point cliqué ou point de fixation choisi) et le pic, en tenant compte des décalages de A.
 const distTo = l => Math.hypot(...l.peak.map((p, k) => (p + off.A[k] - cur(["axial", "coronal", "sagittal"][k])) * spacing[k]));
-const LES_COLS =[["fav", "★"], ["n", "#"], ["dist", "Dist. mm"], ["suv_max", "SUVmax"], ["suv_mean", "SUVmean"], ["mtv_ml", "MTV ml"], ["tlg", "TLG"],
+const LES_COLS =[["fav", "★"], ["ok", "✓"], ["n", "#"], ["dist", "Dist. mm"], ["sul_peak", "SULpeak"], ["sul_max", "SULmax"], ["suv_max", "SUVmax"], ["suv_mean", "SUVmean"], ["mtv_ml", "MTV ml"], ["tlg", "TLG"],
                   ["suv_b", "SUVmax B"], ["delta_pct", "Δ %"], ["organe", "Localisation"]];
 let lesSort = { key: "n", dir: 1 };  // dir : 1 croissant, -1 décroissant ; le tri est conservé quand le seuil ou les décalages changent
 function sortBy(k) {
@@ -581,14 +609,23 @@ function sortBy(k) {
 }
 function renderLesions() {
   const cc = lesionList.length && lesionList[0].suv_b !== undefined;  // séance B chargée : colonnes d'évolution
-  const cols = LES_COLS.filter(([k]) => cc || (k !== "suv_b" && k !== "delta_pct"));
+  const cols = LES_COLS.filter(([k]) => (cc || (k !== "suv_b" && k !== "delta_pct")) && (percist.sul !== false || k !== "sul_max"));  // repli SUV : SULmax = SUVmax
   if (!cols.some(([k]) => k === lesSort.key)) lesSort = { key: "n", dir: 1 };  // colonne B disparue : tri par défaut
   const { key, dir } = lesSort;
-  const favs = favSet();
-  lesionList.forEach(l => { l.fav = favs.has(favId(l)) ? 1 : 0; l.dist = distTo(l); });
+  const favs = favSet(), vals = valMap();
+  lesionList.forEach(l => { l.fav = favs.has(favId(l)) ? 1 : 0; l.dist = distTo(l); l.ok = isValid(l, vals) ? 1 : 0; });
   const vmin = parseFloat($("volmin").value) || 0;
   const shown = lesionList.filter(l => l.mtv_ml >= vmin);
   $("lescount").textContent = `${shown.length} point${shown.length > 1 ? "s" : ""} affiché${shown.length > 1 ? "s" : ""} sur ${lesionList.length}`;
+  // encart PERCIST : unité, référence foie, totaux des points affichés et retenus (✓)
+  const u = percist.unit || "SUL", ref = percist.ref, kept = shown.filter(l => l.ok), f2 = v => v.toFixed(2);
+  $("percist").innerHTML = (percist.error ? `<p class="warn">${esc(percist.error)}</p>` : "") +
+    (percist.sul === false ? `<p class="warn">${esc(percist.label)}</p>` : percist.label ? `<span>Unité <b>${esc(percist.label)}</b></span>` : "") +
+    (ref ? `<span>Référence foie (sphère ${ref.diam_mm} mm) <b>${f2(ref.mean)} ± ${f2(ref.sd)} ${u}</b></span>` +
+           `<span>Seuil PERCIST (1,5 × moy. + 2 σ) <b>${f2(ref.seuil)} ${u}</b></span>`
+         : percist.ref_msg ? `<span>${esc(percist.ref_msg)}</span>` : "") +
+    `<span>Total retenu (${kept.length} point${kept.length > 1 ? "s" : ""} ✓) <b>MTV ${kept.reduce((s, l) => s + l.mtv_ml, 0).toFixed(1)} ml · ` +
+    `TLG ${kept.reduce((s, l) => s + l.tlg_sul, 0).toFixed(1)} (${u})</b></span>`;
   const rows = shown.filter(l => !$("favonly").checked || l.fav).sort((a, b) => {
     const x = a[key], y = b[key], nx = x == null || x === "", ny = y == null || y === "";
     if (nx || ny) return nx - ny || a.n - b.n;
@@ -601,8 +638,10 @@ function renderLesions() {
   // localisation : vide tant que les organes ne sont pas calculés (champ absent), « — » si aucun organe proche
   const loc = l => `<td class="loc">${l.organe === undefined ? "" : l.organe == null ? "—" : esc(l.organe)}</td>`;
   $("tbl").innerHTML = "<tr>" + cols.map(([k, t]) => `<th data-k="${k}"${k === "organe" ? ' class="loc"' : ""} tabindex="0" role="button" title="Trier par cette colonne" ` +
-      `aria-sort="${k === key ? (dir > 0 ? "ascending" : "descending") : "none"}">${t}${k === key ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") + "</tr>" +
-    rows.map((l, i) => `<tr class="les" data-i="${i}" tabindex="0" title="Aller à ce point de fixation"><td class="fav" role="button" aria-label="Favori" aria-pressed="${!!l.fav}" title="Ajouter ou retirer des favoris">${l.fav ? "★" : "☆"}</td><td>${l.n}</td><td>${l.dist.toFixed(0)}</td><td>${l.suv_max.toFixed(2)}</td>` +
+      `aria-sort="${k === key ? (dir > 0 ? "ascending" : "descending") : "none"}">${t.replace("SUL", u)}${k === key ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") + "</tr>" +
+    rows.map((l, i) => `<tr class="les${l.ok ? "" : " excl"}" data-i="${i}" tabindex="0" title="Aller à ce point de fixation"><td class="fav" role="button" aria-label="Favori" aria-pressed="${!!l.fav}" title="Ajouter ou retirer des favoris">${l.fav ? "★" : "☆"}</td>` +
+      `<td class="ok"><input type="checkbox" aria-label="Retenir ce point (PERCIST)"${l.ok ? " checked" : ""} title="${l.physio ? `Fixation physiologique probable (${esc(l.physio)}) : exclue par défaut. ` : ""}Coché : retenu dans les totaux ; décoché : exclu"></td>` +
+      `<td>${l.n}</td><td>${l.dist.toFixed(0)}</td><td>${l.sul_peak.toFixed(2)}</td>${percist.sul !== false ? `<td>${l.sul_max.toFixed(2)}</td>` : ""}<td>${l.suv_max.toFixed(2)}</td>` +
       `<td>${l.suv_mean.toFixed(2)}</td><td>${l.mtv_ml.toFixed(1)}</td><td>${l.tlg.toFixed(1)}</td>` +
       (cc ? `<td>${l.suv_b.toFixed(2)}</td>${evo(l)}` : "") + loc(l) + `</tr>`).join("");
   for (const th of $("tbl").querySelectorAll("th[data-k]")) {
@@ -613,8 +652,9 @@ function renderLesions() {
   for (const tr of $("tbl").querySelectorAll("tr.les")) {
     tr.onmouseenter = tr.onfocus = () => { hover = { z: rows[tr.dataset.i].peak[0], y: rows[tr.dataset.i].peak[1], x: rows[tr.dataset.i].peak[2] }; drawAll(); };
     tr.onmouseleave = tr.onblur = () => { hover = null; drawAll(); };
-    tr.onclick = e => e.target.closest("td.fav") ? toggleFav(rows[tr.dataset.i]) : gotoLesion(rows[tr.dataset.i]);
-    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(); } };
+    tr.onclick = e => e.target.closest("td.fav") ? toggleFav(rows[tr.dataset.i])
+      : e.target.closest("td.ok") ? toggleValid(rows[tr.dataset.i]) : gotoLesion(rows[tr.dataset.i]);
+    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(e); } };
   }
 }
 

@@ -237,6 +237,31 @@ def test_lesion_organ_location_dans_pres_de_loin_et_absence():
         srv.shutdown()
 
 
+def test_percist_route_sul_fallback_and_lesion_fields():
+    from petscan import sul_info
+    from test_petscan import _phantom
+    suv, sp, lab = _phantom()
+    state = State()
+    state.set(*demo())
+    srv = _server(state)
+    try:
+        p = json.loads(_get(srv, "/percist")[1])   # démo : pas de taille ni de sexe -> repli SUV poids, signalé
+        assert p["sul"] is False and p["factor"] == 1.0 and p["ref"] is None and p["computing"] is True
+        state.set(suv, sp, None, sul=sul_info(80, 1.80, "M"))
+        p = json.loads(_get(srv, "/percist")[1])
+        assert p["sul"] is True and p["ref"] is None and "pas de CT" in p["ref_msg"]
+        les = json.loads(_get(srv, "/lesions?thr=2.5")[1])
+        assert all("sul_peak" in l and "physio" not in l for l in les)    # organes pas encore calculés
+        state.organs = (lab, {})
+        p = json.loads(_get(srv, "/percist")[1])
+        assert p["ref"]["mean"] == pytest.approx(2.0 * p["factor"]) and p["ref_msg"] == ""
+        les = json.loads(_get(srv, "/lesions?thr=2.5")[1])
+        assert isinstance(les, list) and next(l for l in les if l["suv_max"] == 5.0)["physio"] == "Vessie"
+        assert les[0]["sul_max"] == pytest.approx(les[0]["suv_max"] * p["factor"])
+    finally:
+        srv.shutdown()
+
+
 def test_autoalign_route_global_local_and_errors():
     import numpy as np
     from compare import shift_volume
