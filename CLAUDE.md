@@ -37,6 +37,7 @@ Lancer depuis la racine : `viewer.py` relit `index.html` à chaque requête (rec
 - Décalages manuels : `out[z,y,x] = vol[z+dz, y+dy, x+dx]` côté serveur ; la valeur affichée dans l'UI est l'opposé (`-d`). Les index de coupe passés en `c=` sont des indices, pas des décalages (`_off(q, key, lim)`).
 - Sécurité (données patient) : écoute sur 127.0.0.1 uniquement, contrôle de l'en-tête `Host` (anti DNS-rebinding), `Sec-Fetch-Site` exigé sur les routes qui changent l'état, `Cache-Control: no-store`, pas de journal des requêtes. Une erreur non gérée dans `do_GET` renvoie du HTML (`send_error`), que le front ne sait pas lire comme du JSON : préférer `_json({"error": …})`.
 - APK Android : le code Python doit rester compatible Python 3.10, numpy 1.23, scipy 1.8.1, matplotlib 3.6 (versions fournies par Chaquopy).
+- README à jour : toute modification pertinente (fonction, limite, prérequis, commande, confidentialité) met à jour `README.md` dans le même commit ; un agent qui change le comportement le fait aussi, et le signale dans son rapport.
 - Ne jamais committer de DICOM, PNG ni PDF (`.gitignore`), sauf les icônes de la marque (`assets/`, `android/app/src/main/res/`), ni de chemins ou identités réels dans les tests ou messages de commit ; les tests utilisent des fantômes synthétiques.
 
 ## Routeur de travail (modèles et agents)
