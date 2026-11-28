@@ -131,9 +131,9 @@ def test_sul_peak_physio_and_liver_reference():
     assert big["sul_peak"] == pytest.approx(f * (8 + 12 / w.sum()), rel=1e-5)   # ni le max ni la moyenne
     assert big["sul_max"] == pytest.approx(20 * f) and big["tlg_sul"] == pytest.approx(f * big["tlg"])
     assert big["physio"] is None and big["valide"] is True
-    bladder = next(l for l in les if l["suv_max"] == 15.0)
+    assert not any(l["suv_max"] == 15.0 for l in les)                       # vessie retirée voxel par voxel
     near = next(l for l in les if l["suv_max"] == 5.0)
-    assert bladder["physio"] == "Vessie" and near["physio"] == "Vessie" and near["valide"] is False
+    assert near["physio"] == "Vessie" and near["valide"] is True             # reste de la lésion au contact : signalé
     assert next(l for l in les if l["suv_max"] == 4.0)["physio"] is None
     assert next(l for l in les if l["suv_max"] == 6.0)["physio"] is None   # foie : pas une fixation physiologique exclue
     assert "physio" not in analyze(suv, 0.012, 2.5, sp, f)[0]               # sans organes : champ absent
@@ -149,3 +149,56 @@ def test_sul_peak_physio_and_liver_reference():
     small = np.zeros_like(lab)
     small[20:26, 40:50, 40:50] = 4
     assert liver_reference(suv, small, sp) is None                             # trop petit pour une boule de 3 cm
+
+
+def test_liver_reference_fallback_on_thin_liver():
+    from petscan import liver_reference
+    sp, f = (3.0, 2.0, 2.0), 0.8
+    suv = np.full((40, 30, 60), 2.0, np.float32)
+    lab = np.zeros(suv.shape, np.uint8)
+    lab[5:35, 5:20, 5:55] = 4                    # 30 mm d'épaisseur en y : distance max au bord 16 mm (< 15 + 5)
+    ref = liver_reference(suv, lab, sp, f)
+    assert ref["erode_mm"] == 0 and ref["diam_mm"] == 30 and not ref["sphere_reduite"] and "0 mm" in ref["msg"]
+    assert ref["mean"] == pytest.approx(2.0 * f) and ref["seuil_suv"] == pytest.approx(ref["seuil"] / f)
+    lab[:] = 0
+    lab[5:35, 5:17, 5:55] = 4                    # 24 mm : seule une sphère de 20 mm tient
+    ref = liver_reference(suv, lab, sp, f)
+    assert ref["erode_mm"] == 0 and ref["diam_mm"] == 20 and ref["sphere_reduite"] and "20 mm" in ref["msg"]
+    full = np.zeros(suv.shape, np.uint8)
+    full[5:35, 2:28, 5:55] = 4
+    assert liver_reference(suv, full, sp, f)["msg"] == ""                     # foie assez épais : pas de repli
+
+
+def _fused(organ, organ_suv, lesion_c, bridge=False):
+    """Fantôme : organe physiologique (sphère r 10 mm, étiquette `organ`) et lésion SUV 7 (r 10 mm) collée ou reliée."""
+    sp = (3.0, 2.0, 2.0)
+    z, y, x = np.mgrid[:40, :60, :80]
+    mm = lambda c: ((z - c[0]) * sp[0]) ** 2 + ((y - c[1]) * sp[1]) ** 2 + ((x - c[2]) * sp[2]) ** 2
+    suv = np.ones(z.shape, np.float32)
+    lab = np.zeros(z.shape, np.uint8)
+    lab[mm((20, 30, 20)) <= 100] = organ
+    suv[lab == organ] = organ_suv
+    les = mm(lesion_c) <= 100
+    suv[les] = 7.0
+    if bridge:
+        suv[20, 30, 20:lesion_c[2]] = np.maximum(suv[20, 30, 20:lesion_c[2]], 3.0)
+    return suv, sp, lab, les
+
+
+def test_lesion_fused_with_bladder_measured_without_bladder_voxels():
+    suv, sp, lab, les = _fused(8, 15.0, (20, 30, 29))        # centres à 18 mm : la lésion touche la vessie
+    vml = float(np.prod(sp)) / 1000
+    out = analyze(suv, vml, 2.5, sp, 1.0, lab, margin_mm=10)
+    assert len(out) == 1
+    r = out[0]
+    assert r["suv_max"] == 7.0 and r["physio"] == "Vessie" and r["valide"] is True   # pas la vessie (15), signalée, retenue
+    assert 0 < r["mtv_ml"] < les.sum() * vml
+
+
+def test_retroperitoneal_lesion_near_kidney_not_excluded():
+    suv, sp, lab, les = _fused(6, 5.0, (20, 30, 40), bridge=True)   # à 20 mm du bord du rein, reliée par un pont SUV 3
+    vml = float(np.prod(sp)) / 1000
+    out = analyze(suv, vml, 2.5, sp, 1.0, lab, margin_mm=10)
+    r = next(l for l in out if l["suv_max"] == 7.0)
+    assert r["valide"] is True and r["mtv_ml"] >= les.sum() * vml                      # lésion entière, retenue
+    assert not any(l["suv_max"] == 5.0 for l in out)                                   # le rein lui-même est retiré

@@ -332,6 +332,13 @@ class State:
         self.status, self.message = "ready", ""
         threading.Thread(target=self._mips, args=(self.vol,), daemon=True).start()
 
+    def liver_ref(self, suv, labels, spacing):
+        """Référence foie PERCIST (`liver_reference`), recalculée seulement si le volume, les organes ou le facteur changent."""
+        key = (id(labels), id(suv), self.sul["factor"])
+        if self._ref[0] != key:
+            self._ref = (key, liver_reference(suv, labels, spacing, self.sul["factor"]))
+        return self._ref[1]
+
     def _organs(self, vol, uid):
         cache = self._orgcache  # celui de ce dossier : si on change de dossier pendant le calcul, on n'y touche plus
         try:
@@ -608,6 +615,11 @@ def make_handler(state):
                     return self._json(patient)
                 if u.path == "/lesions":
                     org = state.organs  # organes pas encore calculés : pas de champs « organe » ni « physio », l'interface relance /lesions
+                    if q["thr"] == "percist":  # seuil de la référence hépatique (SUL) ramené en SUV
+                        ref = org is not None and state.liver_ref(suv, org[0], spacing)
+                        if not ref:
+                            return self._json({"error": "Seuil PERCIST indisponible : pas de référence foie"})
+                        q["thr"] = ref["seuil_suv"]
                     les = analyze(suv, float(np.prod(spacing)) / 1000, float(q["thr"]), spacing, state.sul["factor"],
                                   org[0] if org is not None else None)
                     if org is not None:
@@ -620,14 +632,11 @@ def make_handler(state):
                     ref, msg = None, ("Référence foie indisponible : pas de CT" if ctv is None
                                       else "Référence foie : en attente des organes…" if org is None else "")
                     if org is not None:
-                        key = (id(org[0]), id(suv), si["factor"])
-                        if state._ref[0] != key:
-                            try:
-                                state._ref = (key, liver_reference(suv, org[0], spacing, si["factor"]))
-                            except Exception as e:
-                                return self._json({"error": f"Référence foie : {type(e).__name__} : {e}"})
-                        ref = state._ref[1]
-                        msg = "" if ref else "Référence foie indisponible : foie introuvable ou trop petit"
+                        try:
+                            ref = state.liver_ref(suv, org[0], spacing)
+                        except Exception as e:
+                            return self._json({"error": f"Référence foie : {type(e).__name__} : {e}"})
+                        msg = ref["msg"] if ref else "Référence foie indisponible : foie introuvable ou trop petit"
                     return self._json({**si, "ref": ref, "ref_msg": msg, "computing": ctv is not None and org is None})
                 if u.path == "/img":
                     cmap, mode = q.get("cmap", "jet"), q.get("mode", "pet")

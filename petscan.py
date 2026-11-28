@@ -257,17 +257,25 @@ def _sphere(radius_mm, spacing, sub=1):
 def liver_reference(suv, labels, spacing, factor=1.0, diam_mm=30, erode_mm=5, liver_id=4):
     """Référence hépatique PERCIST : moyenne et écart-type (SUL) dans une boule de `diam_mm` placée automatiquement
     entièrement dans le foie érodé de `erode_mm`, là où le SUL est le plus homogène (écart-type minimal : évite une lésion).
-    Seuil PERCIST = 1,5 × moyenne + 2 × écart-type. None si le foie est absent ou trop petit."""
+    Seuil PERCIST = 1,5 × moyenne + 2 × écart-type (seuil_suv : le même en SUV, ÷ factor).
+    Foie segmenté trop étroit : repli sur une marge nulle, puis sur une boule de 20 mm (sphere_reduite) ; la marge et
+    le diamètre réellement utilisés sont rendus (erode_mm, diam_mm) avec un message (msg, vide sans repli).
+    None si le foie est absent ou trop petit même pour 20 mm."""
     liver = labels == liver_id
     if not liver.any():
         return None
     box = ndimage.find_objects(liver.astype(np.uint8))[0]
     # pad : le bord de la boîte compte comme hors du foie
     d = ndimage.distance_transform_edt(np.pad(liver[box], 1), sampling=spacing)[1:-1, 1:-1, 1:-1]
-    r = diam_mm / 2
-    cand = d > r + erode_mm
-    if not cand.any():
+    for dm, em in ((diam_mm, erode_mm), (diam_mm, 0), (min(diam_mm, 20), 0)):
+        cand = d > dm / 2 + em
+        if cand.any():
+            break
+    else:
         return None
+    msg = "" if em == erode_mm else f"Foie segmenté étroit : marge d'érosion {erode_mm} → 0 mm" + (
+        "" if dm == diam_mm else f", sphère {diam_mm} → {dm} mm")
+    reduite, diam_mm, r = dm < diam_mm, dm, dm / 2
     ker = _sphere(r, spacing)
     img = suv[box].astype(np.float64) * factor
     s1, s2 = (signal.fftconvolve(v, ker.astype(np.float64), mode="same") for v in (img, img * img))  # noyau symétrique
@@ -276,17 +284,28 @@ def liver_reference(suv, labels, spacing, factor=1.0, diam_mm=30, erode_mm=5, li
     half = [n // 2 for n in ker.shape]
     vals = img[tuple(slice(ci - h, ci + h + 1) for ci, h in zip(c, half))][ker]  # valeurs exactes de la boule retenue
     mean, sd = float(vals.mean()), float(vals.std())
-    return {"mean": mean, "sd": sd, "seuil": 1.5 * mean + 2 * sd, "diam_mm": diam_mm,
-            "centre": [int(ci + b.start) for ci, b in zip(c, box)]}
+    seuil = 1.5 * mean + 2 * sd
+    return {"mean": mean, "sd": sd, "seuil": seuil, "seuil_suv": seuil / factor, "diam_mm": diam_mm, "erode_mm": em,
+            "sphere_reduite": reduite, "msg": msg, "centre": [int(ci + b.start) for ci, b in zip(c, box)]}
 
 
 def analyze(suv, voxel_ml, thr=2.5, spacing=None, factor=1.0, organs=None, margin_mm=10):
     """Lésions = composantes connexes de SUV >= thr. Triées par SUVmax décroissant.
     factor : SUV -> SUL (`sul_info`) ; sul_max, sul_mean, tlg_sul en découlent.
     spacing (z,y,x) mm : ajoute sul_peak (moyenne maximale d'une boule de 1 cm³ centrée dans la lésion).
-    organs : étiquettes de `organs.segment_organs` ; ajoute physio (organe à fixation physiologique à moins de
-    margin_mm, sinon None) et valide (False si physio) : la lésion est marquée, pas retirée."""
-    labels, n = ndimage.label(suv >= thr)
+    organs (avec spacing) : étiquettes de `organs.segment_organs`. Exclusion par voxel : les voxels à moins de margin_mm
+    d'un organe à fixation physiologique (PHYSIO) sont retirés avant l'étiquetage ; une maladie collée à la vessie ou à un
+    rein garde ainsi ses autres voxels. physio = organe au contact de la zone retirée (sinon None), simple marque ;
+    valide reste True (une lésion entièrement dans la zone retirée n'existe plus)."""
+    mask = suv >= thr
+    grow = lambda sl, h: tuple(slice(max(0, s.start - k), s.stop + k) for s, k in zip(sl, h))
+    if organs is not None and spacing is not None:
+        hm = [int(np.ceil(margin_mm / s)) + 1 for s in spacing]
+        for oid, sl in enumerate(ndimage.find_objects(organs), 1):
+            if sl is not None and oid in PHYSIO:  # distance calculée dans la boîte de l'organe seulement (rapide)
+                w = grow(sl, hm)
+                mask[w] &= ndimage.distance_transform_edt(organs[w] != oid, sampling=spacing) > margin_mm
+    labels, n = ndimage.label(mask)
     if not n:
         return []
     # Seuls les voxels des lésions sont triés (quelques millions, pas tout le volume) : ndimage.maximum/maximum_position
@@ -306,8 +325,8 @@ def analyze(suv, voxel_ml, thr=2.5, spacing=None, factor=1.0, organs=None, margi
         ker = _sphere(PEAK_R_MM, spacing, sub=5).astype(np.float32)
         ker /= ker.sum()
         hp = [n // 2 for n in ker.shape]
-        hm = [int(np.ceil(margin_mm / s)) for s in spacing]
-        grow = lambda sl, h: tuple(slice(max(0, s.start - k), s.stop + k) for s, k in zip(sl, h))
+        touch = margin_mm + max(spacing)  # au contact de la zone retirée : à moins d'un voxel de plus que la marge
+        hm = [int(np.ceil(touch / s)) for s in spacing]
         for i, sl in enumerate(ndimage.find_objects(labels)):
             w = grow(sl, hp)
             m = ndimage.correlate(suv[w].astype(np.float32), ker, mode="nearest")
@@ -316,10 +335,10 @@ def analyze(suv, voxel_ml, thr=2.5, spacing=None, factor=1.0, organs=None, margi
                 w = grow(sl, hm)
                 org = organs[w]
                 hit = np.isin(org, PHYSIO)
-                near = org[hit & (ndimage.distance_transform_edt(labels[w] != i + 1, sampling=spacing) <= margin_mm)] \
+                near = org[hit & (ndimage.distance_transform_edt(labels[w] != i + 1, sampling=spacing) <= touch)] \
                     if hit.any() else org[:0]
                 out[i]["physio"] = ORGANS[int(np.bincount(near).argmax())][0] if near.size else None
-                out[i]["valide"] = out[i]["physio"] is None
+                out[i]["valide"] = True
     return sorted(out, key=lambda r: -r["suv_max"])
 
 

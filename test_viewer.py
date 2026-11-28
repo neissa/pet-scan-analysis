@@ -210,7 +210,7 @@ def test_lesion_organ_location_dans_pres_de_loin_et_absence():
     for p in peaks.values():
         suv[p] = 5.0
     lab[9:12, 9:12, 9:12] = 4      # Foie : contient le pic « dans »
-    lab[20, 10, 15] = 6            # Rein droit : 5 voxels en x = 10 mm du pic « près de »
+    lab[20, 10, 16] = 6            # Rein droit : 6 voxels en x = 12 mm du pic « près de » (hors de la marge retirée de 10 mm)
     lab[20, 10, 11] = 10           # squelette à 2 mm : ignoré (trop répandu)
     lab[31, 30, 30] = 10           # squelette à 3 mm du pic « loin » : ignoré
     lab[30, 30, 38] = 9            # Cerveau à 8 voxels en x = 16 mm : trop loin
@@ -252,7 +252,12 @@ def test_percist_route_sul_fallback_and_lesion_fields():
         assert p["sul"] is True and p["ref"] is None and "pas de CT" in p["ref_msg"]
         les = json.loads(_get(srv, "/lesions?thr=2.5")[1])
         assert all("sul_peak" in l and "physio" not in l for l in les)    # organes pas encore calculés
+        assert "error" in json.loads(_get(srv, "/lesions?thr=percist")[1])  # pas de référence foie : seuil PERCIST refusé
         state.organs = (lab, {})
+        ref = json.loads(_get(srv, "/percist")[1])["ref"]
+        assert ref["seuil_suv"] == pytest.approx(ref["seuil"] / state.sul["factor"])   # SUL -> SUV
+        lp = json.loads(_get(srv, "/lesions?thr=percist")[1])
+        assert lp == json.loads(_get(srv, f"/lesions?thr={ref['seuil_suv']!r}")[1]) and min(l["suv_max"] for l in lp) >= ref["seuil_suv"]
         p = json.loads(_get(srv, "/percist")[1])
         assert p["ref"]["mean"] == pytest.approx(2.0 * p["factor"]) and p["ref_msg"] == ""
         les = json.loads(_get(srv, "/lesions?thr=2.5")[1])

@@ -48,7 +48,7 @@ pytest -q
 - **Favoris** : étoile pour garder des points et y revenir.
 - **Survol** : un anneau sur les trois vues repère la lésion survolée dans le tableau.
 - **Localisation** : organe dans ou près duquel se trouve le point.
-- **PERCIST** : SUL (masse maigre, James ; repli SUV poids signalé sans taille ni sexe), SULpeak (sphère de 1 cm³) et SULmax par lésion, référence foie (sphère de 3 cm placée automatiquement, moyenne ± écart-type, seuil 1,5 × moy. + 2 σ), lésions près de la vessie, des reins, du cerveau ou du cœur exclues par défaut, case « retenir » par ligne et totaux MTV / TLG des lésions retenues.
+- **PERCIST** : SUL (masse maigre, James ; repli SUV poids signalé sans taille ni sexe), SULpeak (sphère de 1 cm³) et SULmax par lésion, référence foie (sphère de 3 cm placée automatiquement, repli marge 0 puis sphère de 2 cm si le foie segmenté est étroit, moyenne ± écart-type, seuil 1,5 × moy. + 2 σ), seuil de détection PERCIST (référence foie ramenée en SUV) ou manuel, voxels de la vessie, des reins, du cerveau et du cœur (+ 1 cm) retirés avant détection (une lésion à leur contact est signalée), case « retenir » par ligne et totaux MTV / TLG des lésions retenues.
 
 ### Mesures
 - **Règle** : distance en mm sur 2 clics, recalculée en direct.

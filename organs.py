@@ -111,11 +111,20 @@ def segment_organs(suv, ct, spacing, step=2):
             yl = np.nonzero(zl.any(axis=(0, 2)))[0]
             box = zone & (X > xr - mm(10, sx)) & (X < xl + mm(20, sx)) & (Y > yl.min() + mm(15, sy)) & (Y < yl.mean() + mm(10, sy))
             put(_core(soft & ~lungs, soft, 2, 2, box), 3)
-        # Foie : sous le dôme pulmonaire droit, large masse de tissus mous du côté droit.
+        # Foie : sous la coupole droite (qui monte bien au-dessus du bas des poumons) jusqu'au lobe gauche, au-delà de la
+        # ligne médiane. Noyau = plus grosse masse compacte (CT lissé : le foie non injecté, ~55 HU, est bruité), puis
+        # croissance limitée (30 mm) dans les voxels proches de sa densité médiane : rend les bords que l'érosion a coupés.
         liver_box = np.zeros(c.shape, bool)
-        liver_box[zr(zl0 - mm(220, sz), zl0 + mm(15, sz))] = True
-        liver_box &= (X < xmid - mm(5, sx)) & (Y < ymid + mm(40, sy))
-        liver = _core((c > 40) & (c < 170) & soft & (lab == 0), soft, 3, 3, liver_box)
+        liver_box[zr(zl0 - mm(220, sz), zl0 + mm(50, sz))] = True
+        liver_box &= (X < xmid + mm(30, sx)) & (Y < ymid + mm(40, sy))
+        smc = ndimage.uniform_filter(c.astype(np.float32), 3)
+        free = soft & (lab == 0) & liver_box
+        liver = _core((smc > 45) & (smc < 170) & free, soft, 3, 3, liver_box)
+        if liver.any():
+            near = free & (np.abs(c - np.median(c[liver])) < 35)  # CT brut : le lissage rognerait le bord
+            liver |= ndimage.binary_dilation(liver, iterations=mm(30, sx), mask=near)
+            for k in np.flatnonzero(liver.any(axis=(1, 2))):
+                liver[k] = ndimage.binary_fill_holes(liver[k])  # vaisseaux du foie (plus denses une fois injectés)
         put(liver, 4)
         # Rate : sous le dôme gauche, en arrière et en dehors.
         spl_box = np.zeros(c.shape, bool)

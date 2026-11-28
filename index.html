@@ -275,6 +275,8 @@
 
     <details class="sec">
       <summary>Points de fixation</summary>
+      <label class="row" title="PERCIST : seuil de la référence foie (1,5 × moy. + 2 σ) ramené en SUV ; seuil manuel si la référence manque"><span>Seuil</span>
+        <select id="thrmode"><option value="percist">PERCIST (foie)</option><option value="manuel">manuel</option></select></label>
       <label class="row"><span>Seuil des points de fixation (SUV)</span>
         <input id="thr" type="number" value="2.5" step="0.1" min="0"><button type="button" class="step" data-for="thr" data-d="-1" aria-label="Diminuer" title="Diminuer (maintenir : répéter)">−</button><button type="button" class="step" data-for="thr" data-d="1" aria-label="Augmenter" title="Augmenter (maintenir : répéter)">+</button></label>
       <label class="row" title="Masque les points plus petits (bruit : quelques voxels isolés)"><span>Volume minimum (ml)</span>
@@ -563,9 +565,13 @@ async function lesions() {
   if (!isFinite(parseFloat($("thr").value))) return;  // champ vide ou en cours de saisie
   const my = ++lesTok;  // une réponse plus ancienne ne doit pas écraser une plus récente
   $("tbl").style.opacity = .5;
-  const [r, p] = await Promise.all([fetch(`/lesions?thr=${$("thr").value}&oa=${offParam("A")}&ob=${offParam("B")}`).then(x => x.json()),
-                                    fetch("/percist").then(x => x.json())]);
+  const p = await fetch("/percist").then(x => x.json());
+  // seuil PERCIST si choisi et si la référence foie existe ; sinon seuil manuel
+  const auto = $("thrmode").value === "percist" && p.ref;
+  if (auto) $("thr").value = p.ref.seuil_suv.toFixed(2);
+  const r = await fetch(`/lesions?thr=${auto ? "percist" : $("thr").value}&oa=${offParam("A")}&ob=${offParam("B")}`).then(x => x.json());
   if (my !== lesTok) return;
+  p.auto = auto;
   $("tbl").style.opacity = 1;
   if (!Array.isArray(r)) return;
   lesionList = r;
@@ -585,7 +591,7 @@ function toggleFav(l) {
   localStorage.setItem(favKey(), JSON.stringify([...s]));
   renderLesions();
 }
-// Validation PERCIST : par défaut, un point proche d'un organe à fixation physiologique est exclu (valide = false) ;
+// Validation PERCIST : le serveur retire déjà les voxels des organes à fixation physiologique (et leur marge) ; un point à leur contact est seulement signalé (physio) ;
 // le choix de l'utilisateur, mémorisé comme les favoris, l'emporte. Champ valide absent (organes pas encore calculés) : retenu.
 let percist = {};
 const valKey = () => "val:" + $("folder").value.trim();
@@ -621,9 +627,10 @@ function renderLesions() {
   const u = percist.unit || "SUL", ref = percist.ref, kept = shown.filter(l => l.ok), f2 = v => v.toFixed(2);
   $("percist").innerHTML = (percist.error ? `<p class="warn">${esc(percist.error)}</p>` : "") +
     (percist.sul === false ? `<p class="warn">${esc(percist.label)}</p>` : percist.label ? `<span>Unité <b>${esc(percist.label)}</b></span>` : "") +
-    (ref ? `<span>Référence foie (sphère ${ref.diam_mm} mm) <b>${f2(ref.mean)} ± ${f2(ref.sd)} ${u}</b></span>` +
-           `<span>Seuil PERCIST (1,5 × moy. + 2 σ) <b>${f2(ref.seuil)} ${u}</b></span>`
-         : percist.ref_msg ? `<span>${esc(percist.ref_msg)}</span>` : "") +
+    (ref ? `<span>Référence foie (sphère ${ref.diam_mm} mm, marge ${ref.erode_mm} mm) <b>${f2(ref.mean)} ± ${f2(ref.sd)} ${u}</b></span>` +
+           `<span>Seuil PERCIST (1,5 × moy. + 2 σ) <b>${f2(ref.seuil)} ${u} = ${f2(ref.seuil_suv)} SUV</b></span>` : "") +
+    (percist.ref_msg ? `<span${ref ? ' class="warn"' : ""}>${esc(percist.ref_msg)}</span>` : "") +
+    `<span>Seuil utilisé <b>${esc($("thr").value)} SUV (${percist.auto ? "PERCIST" : "manuel"})</b></span>` +
     `<span>Total retenu (${kept.length} point${kept.length > 1 ? "s" : ""} ✓) <b>MTV ${kept.reduce((s, l) => s + l.mtv_ml, 0).toFixed(1)} ml · ` +
     `TLG ${kept.reduce((s, l) => s + l.tlg_sul, 0).toFixed(1)} (${u})</b></span>`;
   const rows = shown.filter(l => !$("favonly").checked || l.fav).sort((a, b) => {
@@ -640,7 +647,7 @@ function renderLesions() {
   $("tbl").innerHTML = "<tr>" + cols.map(([k, t]) => `<th data-k="${k}"${k === "organe" ? ' class="loc"' : ""} tabindex="0" role="button" title="Trier par cette colonne" ` +
       `aria-sort="${k === key ? (dir > 0 ? "ascending" : "descending") : "none"}">${t.replace("SUL", u)}${k === key ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") + "</tr>" +
     rows.map((l, i) => `<tr class="les${l.ok ? "" : " excl"}" data-i="${i}" tabindex="0" title="Aller à ce point de fixation"><td class="fav" role="button" aria-label="Favori" aria-pressed="${!!l.fav}" title="Ajouter ou retirer des favoris">${l.fav ? "★" : "☆"}</td>` +
-      `<td class="ok"><input type="checkbox" aria-label="Retenir ce point (PERCIST)"${l.ok ? " checked" : ""} title="${l.physio ? `Fixation physiologique probable (${esc(l.physio)}) : exclue par défaut. ` : ""}Coché : retenu dans les totaux ; décoché : exclu"></td>` +
+      `<td class="ok"><input type="checkbox" aria-label="Retenir ce point (PERCIST)"${l.ok ? " checked" : ""} title="${l.physio ? `Au contact de ${esc(l.physio)} (fixation physiologique) : ses voxels et la marge autour sont déjà retirés. ` : ""}Coché : retenu dans les totaux ; décoché : exclu"></td>` +
       `<td>${l.n}</td><td>${l.dist.toFixed(0)}</td><td>${l.sul_peak.toFixed(2)}</td>${percist.sul !== false ? `<td>${l.sul_max.toFixed(2)}</td>` : ""}<td>${l.suv_max.toFixed(2)}</td>` +
       `<td>${l.suv_mean.toFixed(2)}</td><td>${l.mtv_ml.toFixed(1)}</td><td>${l.tlg.toFixed(1)}</td>` +
       (cc ? `<td>${l.suv_b.toFixed(2)}</td>${evo(l)}` : "") + loc(l) + `</tr>`).join("");
@@ -1202,7 +1209,9 @@ for (const b of document.querySelectorAll("button.step")) {
   b.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
 }
 $("thr").onchange = lesions; // Entrée ou perte du focus : tout de suite
-$("thr").oninput = () => { clearTimeout(lesTimer); lesTimer = setTimeout(lesions, 350); };  // en tapant ou avec les flèches : après une courte pause
+// saisir un seuil repasse en mode manuel
+$("thr").oninput = () => { $("thrmode").value = "manuel"; clearTimeout(lesTimer); lesTimer = setTimeout(lesions, 350); };  // en tapant ou avec les flèches : après une courte pause
+$("thrmode").onchange = lesions;
 $("pct").oninput = () => { $("pctv").textContent = $("pct").value; remeasure(); };
 $("tol").oninput = () => { $("tolv").textContent = $("tol").value; remeasure(); };
 $("open").onclick = openFolder;
