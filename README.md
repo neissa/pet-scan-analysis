@@ -118,3 +118,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 - **Avis de statut** : PERCIST simplifié (référence = première date, pas de nadir ; croissance jugée sur le volume à 50 % du max local, pas sur le TLG) ; les nouvelles fixations ne comptent que si vous les avez ajoutées à la carte ; dates enregistrées avant cette version sans conditions d'acquisition (comparabilité non vérifiée). RECIST 1.1 : mesures sur le CT basse dose sans injection de la TEP-CT (non diagnostiques), diamètre par tolérance HU approximatif (région fuyante, non bornée ou de densité non tissulaire = lésion non mesurable, jamais de valeur inventée ; une lésion disparue fait souvent « fuir » la région, la RC est donc rarement conclue), cible non ganglionnaire considérée disparue sous 5 mm, aucun ganglion segmenté (à marquer à la main), dates enregistrées avant cette version « diamètre non enregistré » (NE).
 - **Absent** : DICOM multi-séries.
 - Ne committez jamais de DICOM (`.gitignore` les exclut).
+
+## Licence
+
+[MIT](LICENSE). Le logiciel est fourni tel quel, sans garantie ; ce n'est pas un dispositif médical.

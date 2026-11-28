@@ -1,6 +1,8 @@
 [project]
 name = "pet-scan-analysis"
-version = "0.1.0"
+version = "0.2.0"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 dependencies = ["numpy", "scipy", "pydicom", "matplotlib", "pillow"]
 
