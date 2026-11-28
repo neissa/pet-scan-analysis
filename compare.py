@@ -1,11 +1,16 @@
 """Recalage de deux séances d'un même patient (positions sur la table différentes).
 Translation entière estimée par corrélation croisée (FFT) du squelette vu au CT ; pas de rotation ni de déformation.
 Grilles d'espacements différents : `resample` ramène un volume sur l'espacement de l'autre avant le recalage."""
+import warnings
+
 import numpy as np
 from scipy import ndimage
 from scipy.signal import fftconvolve
 
 from organs import _body
+
+# SciPy < 1.10 avertit à chaque affine_transform à matrice diagonale (1-D), usage voulu ici et dans viewer.py ; filtre global (thread-safe, contrairement à catch_warnings)
+warnings.filterwarnings("ignore", message="The behavior of affine_transform with a 1-D array", category=UserWarning)
 
 
 def _bone(ct, step):
@@ -80,7 +85,7 @@ def refine_shift(ct_a, ct_b, da=(0, 0, 0), db=(0, 0, 0), center=None, half=None,
     ha = _bone(_crop(ct_a, [l + d for l, d in zip(lo, da)], [h + d for h, d in zip(hi, da)], -1000), step)
     hb = _bone(_crop(ct_b, [l - pad + d for l, d in zip(lo, db)], [h + pad + d for h, d in zip(hi, db)], -1000), step)
     corr = fftconvolve(hb, ha[::-1, ::-1, ::-1], mode="valid")
-    energy = fftconvolve(hb * hb, np.ones_like(ha), mode="valid")  # énergie de B sous chaque position
+    energy = np.maximum(fftconvolve(hb * hb, np.ones_like(ha), mode="valid"), 0)  # énergie de B sous chaque position (jamais < 0 : arrondi FFT)
     ncc = corr / np.sqrt(energy * float((ha * ha).sum()) + 1e-6)
     ncc[energy < 0.05 * energy.max()] = 0  # positions où B est presque vide : pas de verdict
     k = np.unravel_index(int(np.argmax(ncc)), ncc.shape)

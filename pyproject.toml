@@ -8,3 +8,10 @@ dependencies = ["numpy>=1.23", "scipy>=1.8.1", "pydicom", "matplotlib>=3.6", "pi
 
 [tool.setuptools]
 py-modules = ["petscan"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+  "ignore::DeprecationWarning:pydicom",
+  "ignore:The behavior of affine_transform with a 1-D array:UserWarning",
+  "ignore:.*deprecated - use:DeprecationWarning:matplotlib",
+]
