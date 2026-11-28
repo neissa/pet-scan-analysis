@@ -139,6 +139,8 @@
   td:first-child, th:first-child, td.loc, th.loc { text-align: left; }
   td.ok { text-align: center; } td.ok input { margin: 0; }
   details.subsec { margin-top: 8px; } details.subsec > summary { cursor: pointer; min-height: 28px; display: flex; align-items: center; color: var(--label-2); }
+  #ftbl td.ok { white-space: nowrap; } #ftbl button { padding: 0 5px; min-width: 0; min-height: 0; }   /* actions d'une lésion suivie */
+  #dlist { overflow-wrap: anywhere; }
   td.up { color: var(--up); } td.down { color: var(--down); }   /* évolution d'un point de fixation : hausse / baisse */
   tr.excl td:not(.ok) { color: var(--label-3); text-decoration: line-through; }   /* point exclu (physiologique ou décoché) */
   th[data-k] { cursor: pointer; user-select: none; white-space: nowrap; } th[data-k]:hover { color: var(--label); }
@@ -286,6 +288,36 @@
       <label class="row"><span>Favoris seulement (★)</span>
         <input id="favonly" type="checkbox"></label>
       <table id="tbl"></table>
+    </details>
+
+    <details class="sec" id="followsec">
+      <summary>Suivi (carte de référence)</summary>
+      <p id="fbanner" class="hint" role="status"></p>
+      <div class="btns">
+        <select id="frefs" aria-label="Référence à appliquer"></select>
+        <button id="fapply" class="primary" title="Recale cette séance sur la référence et mesure chaque lésion mémorisée à sa position">Appliquer le suivi</button>
+        <button id="fdefine" title="Enregistre les points retenus (✓, au-dessus du volume minimum) du tableau des points de fixation comme carte de référence de ce patient">Définir comme référence</button>
+        <button id="fadd" title="Ajoute à la carte le point du curseur croisé (cliquez d'abord sur la lésion avec l'outil Naviguer)">Ajouter le point courant</button>
+        <button id="frecord" disabled title="Ajoute les mesures de cette séance (nombres seulement) à la carte du patient">Enregistrer cette date</button>
+      </div>
+      <p id="fmsg" class="hint" role="status"></p>
+      <table id="ftbl"></table>
+      <div id="fnew"></div>
+      <p class="hint">Mesure aux positions mémorisées, sans seuil global : SUVmax et SULmax dans 12 mm (voxels de la vessie, des reins, du cœur et du cerveau écartés),
+        SULpeak (1 cm³) et volume à 50 % du max local. MTV et TLG ne servent à aucun statut. ⚠ excrétion possible : max &gt; 20 ou urine à moins de 20 mm
+        (vessie, rein, trajet urétéral) ; la lésion reste mesurée.</p>
+    </details>
+
+    <details class="sec" id="datasec">
+      <summary>Données enregistrées</summary>
+      <p id="dinv" class="hint" role="status"></p>
+      <label class="check"><input type="checkbox" id="drecent"> <span>Mémoriser les dossiers récents</span></label>
+      <div class="btns">
+        <select id="dwhat" aria-label="Données à supprimer"></select>
+        <button id="dprev">Aperçu</button>
+        <button id="ddel">Supprimer…</button>
+      </div>
+      <div id="dlist" class="hint"></div>
     </details>
 
     <p class="note">Recherche uniquement, pas un dispositif médical. Molette sur une image : coupe suivante / précédente (Maj = ×10 ;
@@ -832,6 +864,7 @@ async function build(info) {
   refresh();
   lesions();
   loadPatient();
+  loadRefs();
   watchOrgans();
   watchMips();
   $("cfolder").value = $("cfolder").value || (info.recent || []).find(f => f !== info.folder) || "";
@@ -1283,6 +1316,163 @@ function setInspHidden(h) {
 }
 $("gear").onclick = () => setInspHidden(!$("app").classList.contains("noinsp"));
 try { setInspHidden(localStorage.getItem("inspHidden") === "1"); } catch {}
+// --- Suivi multi-dates : carte de référence du patient (côté serveur, pseudonymisée), mesurée à chaque séance ---
+let fkey = null, fmap = null, fres = null;  // référence choisie, sa carte, dernier suivi appliqué à cette séance
+const n2 = v => v == null ? "—" : v.toFixed(2).replace(".", ",");
+const ko = n => (n / 1024).toFixed(1).replace(".", ",") + " ko";
+const post = (path, obj) => fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) }).then(r => r.json());
+async function loadRefs() {
+  const r = await fetch("/refs").then(x => x.json());
+  fres = null; $("frecord").disabled = true; $("fmsg").textContent = "";
+  $("frefs").innerHTML = r.refs.map(x => `<option value="${x.key}">${x.key.slice(0, 8)} · réf. ${esc(x.ref_date)} · ${x.n} lésion(s) · ${x.dates.length} date(s)</option>`).join("");
+  $("frefs").hidden = $("fapply").disabled = !r.refs.length;
+  const c = r.refs.find(x => x.key === r.current);
+  if (c) $("frefs").value = c.key;
+  $("fbanner").textContent = c ? `Patient reconnu : ${c.n} lésion(s) de référence (${c.ref_date}).`
+    : r.refs.length ? "Pas de référence reconnue pour ce patient : choisissez-en une dans la liste (même patient) ou définissez-en une."
+    : "Aucune référence : cochez les lésions retenues (✓) puis « Définir comme référence ».";
+  fkey = r.current;
+  await showMap();
+}
+async function showMap() {
+  fmap = fkey ? await fetch("/ref?key=" + fkey).then(x => x.json()) : null;
+  if (fmap && fmap.error) fmap = null;
+  renderFollow();
+}
+// Une ligne par lésion, une colonne par date (référence, dates enregistrées, puis cette séance si elle n'est pas enregistrée) ;
+// variation du SUVmax en % par rapport à la référence et à la date précédente (dernière colonne mesurée).
+function renderFollow() {
+  if (!fmap) { $("ftbl").innerHTML = ""; $("fnew").replaceChildren(); return; }
+  const cols = fmap.dates_sorted.map(d => ({ d, vals: fmap.dates[d].values || {} }));
+  if (fres && !fmap.dates[fres.date]) cols.push({ d: fres.date + " (cette séance)", vals: fres.rows, cur: true });
+  const sul = fmap.unit === "SUL";
+  const cell = v => !v ? "<td>—</td>" : `<td title="SUVmax${sul ? " / SULmax" : ""} · SULpeak · volume à 50 % du max local` +
+    (v.contact.length ? ` · au contact : ${esc(v.contact.join(", "))}` : "") + (v.dist_mm > 6 ? ` · pic à ${v.dist_mm.toFixed(0)} mm de la position attendue` : "") + `">` +
+    `${n2(v.suv_max)}${sul ? " / " + n2(v.sul_max) : ""}<br><small>pk ${n2(v.sul_peak)} · ${v.vol_ml.toFixed(1).replace(".", ",")} ml</small>` +
+    (v.flags.length ? `<br><small class="warn">⚠ ${esc(v.flags.join(", "))}</small>` : "") + "</td>";
+  const pct = (a, b) => a && b && b.suv_max >= 0.5 ? (a.suv_max - b.suv_max) / b.suv_max * 100 : null;
+  const dl = v => v == null ? "<td>—</td>" : `<td class="${v > 25 ? "up" : v < -25 ? "down" : ""}">${v > 0 ? "+" : ""}${v.toFixed(0)}</td>`;
+  $("ftbl").innerHTML = `<tr><th>Lésion</th>${cols.map(c => `<th>${esc(c.d)}</th>`).join("")}<th>Δ % réf.</th><th>Δ % préc.</th><th></th></tr>` +
+    fmap.lesions.map((l, i) => {
+      const vs = cols.map(c => c.vals[l.id]), k = vs.map((v, j) => v ? j : -1).filter(j => j >= 0), last = vs[k[k.length - 1]];
+      return `<tr class="les${l.status === "exclu" ? " excl" : ""}" data-i="${i}" tabindex="0" title="${esc(l.note || "Aller à cette lésion")}">` +
+        `<td>${esc(l.name)}<br><small>${esc(l.organe || "")}${l.since !== fmap.ref_date ? " · depuis " + esc(l.since) : ""}</small></td>` +
+        vs.map(cell).join("") + dl(k.length > 1 ? pct(last, vs[0]) : null) + dl(k.length > 1 ? pct(last, vs[k[k.length - 2]]) : null) +
+        `<td class="ok"><button data-op="name" title="Renommer">✎</button><button data-op="note" title="Note libre">N</button>` +
+        `<button data-op="status" title="${l.status === "exclu" ? "Valider" : "Exclure"}">${l.status === "exclu" ? "✓" : "✗"}</button><button data-op="remove" title="Retirer de la carte">×</button></td></tr>`;
+    }).join("");
+  for (const tr of $("ftbl").querySelectorAll("tr.les")) {
+    const l = fmap.lesions[tr.dataset.i];
+    tr.onclick = e => { const b = e.target.closest("button"); b ? editLesion(l, b.dataset.op) : goFollow(l); };
+    tr.onkeydown = e => { if (e.key === "Enter" && e.target === tr) goFollow(l); };
+  }
+  $("fnew").replaceChildren(...(fres ? fres.new : []).map(n => {
+    const row = document.createElement("div");
+    row.className = "mrow";
+    row.append(`Nouvelle fixation : SUVmax ${n2(n.suv_max)}, SULpeak ${n2(n.sul_peak)}, ${n.vol_ml.toFixed(1)} ml` + (n.flags.length ? ` (⚠ ${n.flags.join(", ")})` : ""));
+    for (const [t, f] of [["Voir", () => gotoLesion(n)], ["Valider", () => addLesion(n.peak)], ["Ignorer", () => { fres.new.splice(fres.new.indexOf(n), 1); renderFollow(); }]]) {
+      const b = document.createElement("button"); b.textContent = t; b.onclick = f; row.append(" ", b);
+    }
+    return row;
+  }));
+}
+// Position de la lésion sur la séance affichée : pic mesuré par le suivi, sinon la position de référence (séance de référence)
+function goFollow(l) {
+  const r = fres && fres.rows[l.id];
+  if (r) gotoLesion(r); else if (!fres || fres.date === fmap.ref_date) gotoLesion({ peak: l.vox });
+}
+async function applyFollow(ask = true) {
+  const key = $("frefs").value;
+  if (!key || ask && !confirm(`Appliquer la référence ${key.slice(0, 8)} à cette séance ? Elle sera recalée sur la séance de référence, puis chaque lésion mémorisée y sera mesurée.`)) return;
+  $("fapply").disabled = true; $("fmsg").textContent = "Suivi en cours (recalage et mesures)…";
+  try {
+    const r = await fetch(`/follow?key=${key}&thr=${parseFloat($("thr").value) || 2.5}&vmin=${parseFloat($("volmin").value) || 0}`).then(x => x.json());
+    if (r.error) { $("fmsg").textContent = r.error; return; }
+    fkey = key; fres = r;
+    $("frecord").disabled = r.date === r.ref_date;
+    $("fmsg").textContent = `Recalage : ${r.method}, décalage (z ; y ; x) = ${r.shift_mm.map(v => String(v).replace(".", ",")).join(" ; ")} mm` +
+      (r.score != null ? `, corrélation du squelette ${n2(r.score)}` : "") + `. ${r.new.length} nouvelle(s) fixation(s) proposée(s) (≥ ${$("thr").value} SUV).`;
+    await showMap();
+  } finally { $("fapply").disabled = false; }
+}
+async function defineRef() {
+  const vmin = parseFloat($("volmin").value) || 0, vals = valMap(), sel = lesionList.filter(l => isValid(l, vals) && l.mtv_ml >= vmin);
+  if (!sel.length) return $("fmsg").textContent = "Aucun point retenu (✓) dans le tableau des points de fixation.";
+  if (!confirm(`Définir ${sel.length} lésion(s) retenue(s) comme carte de référence de ce patient (séance du ${sessDate.a || "?"}) ?`)) return;
+  const body = { lesions: sel.map(l => ({ vox: l.peak })) };
+  let r = await post("/ref/define", body);
+  if (r.exists) {
+    if (!confirm("Une référence existe déjà pour ce patient : la remplacer ? Ses dates enregistrées seront perdues.")) return;
+    r = await post("/ref/define", { ...body, replace: true });
+  }
+  if (r.error) return $("fmsg").textContent = r.error;
+  await loadRefs(); loadData();
+  $("fmsg").textContent = `Référence enregistrée : ${r.n} lésion(s).`;
+}
+async function addLesion(vox) {
+  if (!fkey) return $("fmsg").textContent = "Choisissez d'abord une référence (ou définissez-en une).";
+  const name = prompt("Nom de la lésion (facultatif)", "");
+  if (name === null) return;
+  const r = await post("/ref/update", { key: fkey, op: "add", vox, name });
+  if (r.error) return $("fmsg").textContent = r.error;
+  if (fres && fres.date !== fmap.ref_date) await applyFollow(false); else await showMap();
+}
+async function editLesion(l, op) {
+  let body = { key: fkey, op, id: l.id };
+  if (op === "name" || op === "note") {
+    const v = prompt(op === "name" ? "Nom de la lésion" : "Note libre", l[op] || "");
+    if (v === null) return;
+    body.value = v;
+  } else if (op === "status") body.status = l.status === "exclu" ? "valide" : "exclu";
+  else if (!confirm(`Retirer ${l.name} de la carte (et ses mesures de toutes les dates) ?`)) return;
+  const r = await post("/ref/update", body);
+  if (r.error) $("fmsg").textContent = r.error;
+  await showMap();
+}
+$("fapply").onclick = () => applyFollow();
+$("fdefine").onclick = defineRef;
+$("fadd").onclick = () => addLesion(["axial", "coronal", "sagittal"].map((v, k) => cur(v) - off.A[k]));
+$("frecord").onclick = async () => {
+  if (!fres || !confirm(`Enregistrer les mesures du ${fres.date} dans la carte du patient (nombres seulement) ?`)) return;
+  const r = await post("/ref/record", { key: fkey });
+  $("fmsg").textContent = r.error || `Mesures du ${fres.date} enregistrées.`;
+  await showMap(); loadData();
+};
+$("frefs").onchange = () => { fkey = $("frefs").value; fres = null; $("frecord").disabled = true; showMap(); };
+
+// --- Données enregistrées : inventaire sans identité (appli et navigateur), aperçu puis suppression confirmée ---
+const lsKeys = () => { const k = []; try { for (let i = 0; i < localStorage.length; i++) k.push(localStorage.key(i)); } catch {} return k; };
+const lsFav = () => lsKeys().filter(k => /^(fav|val):/.test(k));  // favoris et choix ✓, par dossier
+async function loadData() {
+  const [d, refs] = await Promise.all([fetch("/data").then(x => x.json()), fetch("/refs").then(x => x.json())]);
+  const favs = lsFav().length, prefs = lsKeys().length - favs;
+  $("dinv").textContent = `Appli : ${d.patients} patient(s) pseudonymisé(s), ${d.lesions} lésion(s), ${d.dates} date(s) ; ${d.fichiers.length} fichier(s), ${ko(d.octets)}. ` +
+    `Dossiers récents : ${d.recents} (${d.recent_on ? "activés" : "désactivés"}). Navigateur : ${favs} liste(s) de favoris ou de choix ✓, ${prefs} préférence(s) (thème, panneau).`;
+  $("drecent").checked = d.recent_on;
+  $("dwhat").innerHTML = refs.refs.map(r => `<option value="patient:${r.key}">Patient ${r.key.slice(0, 8)} (réf. ${esc(r.ref_date)})</option>`).join("") +
+    `<option value="recent">Dossiers récents</option><option value="fav">Favoris et choix ✓ (navigateur)</option><option value="all">Tout (appli et navigateur)</option>`;
+}
+async function dataPreview() {
+  const [what, key] = $("dwhat").value.split(":");
+  const files = what === "fav" ? [] : await fetch(`/data/preview?what=${what}${key ? "&key=" + key : ""}`).then(x => x.json());
+  const local = what === "fav" ? lsFav().length : what === "all" ? lsKeys().length : 0;
+  const lines = files.map(f => `${f.nom} (${ko(f.octets)})`).concat(local ? [`navigateur : ${local} entrée(s)`] : []);
+  $("dlist").textContent = lines.length ? "Sera supprimé : " + lines.join(" ; ") : "Rien à supprimer.";
+  return { what, key, lines };
+}
+$("dprev").onclick = dataPreview;
+$("ddel").onclick = async () => {
+  const { what, key, lines } = await dataPreview();
+  if (!lines.length || !confirm("Supprimer définitivement :\n" + lines.join("\n") + "\n\nCette suppression est irréversible.")) return;
+  if (what !== "fav") await fetch(`/data/delete?what=${what}${key ? "&key=" + key : ""}&confirm=1`);
+  try { if (what === "fav") lsFav().forEach(k => localStorage.removeItem(k)); if (what === "all") localStorage.clear(); } catch {}
+  $("dlist").textContent = "Supprimé.";
+  applyTheme(); if (lesionList.length) renderLesions();
+  await loadData(); if (shape) loadRefs();
+};
+$("drecent").onchange = async () => { await fetch(`/settings?recent_on=${$("drecent").checked ? 1 : 0}`); loadData(); };
+$("datasec").ontoggle = () => { if ($("datasec").open) loadData(); };
+
 new ResizeObserver(layout).observe(document.querySelector("main"));  // fenêtre, panneau ou roue crantée : les images suivent la largeur
 syncTool();
 buildOffsets();

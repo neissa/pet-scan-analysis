@@ -321,7 +321,88 @@ def test_android_env_index_and_config(tmp_path, monkeypatch):
         assert _get(srv, "/") == (200, b"<p>page android</p>")  # PETSCAN_INDEX prioritaire
     finally:
         srv.shutdown()
-    cfg = tmp_path / "cfg.json"  # PETSCAN_CONFIG : lu à l'import, d'où un processus à part
-    out = subprocess.run([sys.executable, "-c", "import viewer; viewer.remember('/d'); print(viewer.recent())"],
-                         env={**os.environ, "PETSCAN_CONFIG": str(cfg)}, capture_output=True, text=True)
-    assert out.stdout.strip() == "['/d']" and cfg.exists()
+    cfg = tmp_path / "cfg.json"  # PETSCAN_CONFIG : lu à l'import, d'où un processus à part ; ancien fichier migré puis supprimé
+    cfg.write_text('{"recent": ["/old"]}', encoding="utf-8")
+    code = ("import store, viewer; print(viewer.recent()); store.set_config(recent_on=True); viewer.remember('/d'); "
+            "print(viewer.recent(), store.DIR.name)")
+    out = subprocess.run([sys.executable, "-c", code], env={**os.environ, "PETSCAN_CONFIG": str(cfg)}, capture_output=True, text=True)
+    assert out.stdout.split("\n")[:2] == ["[]", "['/d', '/old'] netscan"], out.stderr
+    assert not cfg.exists() and (tmp_path / "netscan" / "config.json").is_file()
+
+
+def _post(srv, path, obj, site=None):
+    c = http.client.HTTPConnection("127.0.0.1", srv.server_port)
+    h = {"Host": f"127.0.0.1:{srv.server_port}", "Content-Type": "application/json", **({"Sec-Fetch-Site": site} if site else {})}
+    c.request("POST", path, body=json.dumps(obj), headers=h)
+    r = c.getresponse()
+    return json.loads(r.read()) if r.status != 403 else 403
+
+
+def _session(d, lesion_suv, extra=None):
+    """Séance synthétique décalée de d voxels (b[x + d] = a[x]) : CT, organes (vessie pleine d'urine), lésions."""
+    import numpy as np
+    from compare import shift_volume
+    from test_compare import phantom
+    ct = phantom()
+    z, y, x = np.mgrid[:80, :90, :90]
+    ball = lambda c, r: (z - c[0]) ** 2 + (y - c[1]) ** 2 + (x - c[2]) ** 2 <= r * r
+    suv = np.ones(ct.shape, np.float32)
+    lab = np.zeros(ct.shape, np.uint8)
+    lab[ball((20, 45, 55), 5)] = 8                     # vessie, urine SUV 50
+    suv[lab == 8] = 50
+    suv[ball((40, 45, 30), 3)] = 0.8 * lesion_suv     # L1 : pic au centre
+    suv[40, 45, 30] = lesion_suv
+    suv[ball((20, 45, 62), 2)] = 5.0                   # L2 collée à la vessie
+    suv[20, 45, 62] = 5.5
+    if extra:
+        suv[ball(extra, 2)] = 6.0                      # nouvelle fixation
+    back = tuple(-v for v in d)
+    return (shift_volume(suv, back, ct.shape, 1.0), shift_volume(ct, back, ct.shape, -1000), shift_volume(lab, back, ct.shape, 0))
+
+
+def test_reference_map_follow_three_dates_excretion_new_fixation_and_deletion():
+    import store
+    sp = (2.0, 2.0, 2.0)
+    pat = lambda date: {"Nom": "Fantôme TEST", "Identifiant": "PH-0001", "Naissance": "01/01/1950", "Date de l'examen": date}
+    state = State()
+    srv = _server(state)
+    try:
+        suv, ct, lab = _session((0, 0, 0), 8.0)
+        state.set(suv, sp, ct, pat("01/04/2026"), "refA")
+        assert "error" in _post(srv, "/ref/define", {"lesions": [{"vox": [40, 45, 30]}]})   # organes pas encore calculés
+        state.organs = (lab, {})
+        assert json.loads(_get(srv, "/refs")[1]) == {"current": None, "refs": []}
+        key = _post(srv, "/ref/define", {"lesions": [{"vox": [40, 45, 30], "name": "rate"}, {"vox": [20, 45, 62]}]})["key"]
+        assert _post(srv, "/ref/define", {"lesions": []}) == {"exists": True}      # pas d'écrasement sans confirmation
+        assert json.loads(_get(srv, "/refs")[1])["current"] == key
+        ct_ref = ct
+        for d, date, v, extra in (((3, -4, 5), "01/07/2026", 6.0, (60, 30, 45)), ((-2, 3, -4), "01/09/2026", 4.0, None)):
+            suv, ct, lab = _session(d, v, extra)
+            state.set(suv, sp, ct, pat(date), "autre")
+            state.organs, state._refct = (lab, {}), ("refA", ct_ref)   # CT de référence déjà relu
+            f = json.loads(_get(srv, f"/follow?key={key}&thr=3")[1])
+            l1, l2 = f["rows"]["L1"], f["rows"]["L2"]
+            assert l1["peak"] == [40 + d[0], 45 + d[1], 30 + d[2]] and l1["suv_max"] == v, f        # recalage, lésion retrouvée
+            assert l1["flags"] == [] and "excrétion possible" in l2["flags"] and l2["suv_max"] == 5.5  # urine écartée, lésion gardée
+            assert f["score"] > 0.5 and f["method"].startswith("squelette")
+            news = [n["peak"] for n in f["new"]]   # boule uniforme de rayon 2 : pic n'importe où dedans
+            assert len(news) == bool(extra) and all(max(abs(a - b - c) for a, b, c in zip(n, extra, d)) <= 2 for n in news), news
+            assert _post(srv, "/ref/record", {"key": key}) == {"ok": True}
+        assert _post(srv, "/ref/update", {"key": key, "op": "add", "vox": [40, 45, 30]})["ok"]   # ajout au point courant
+        assert _post(srv, "/ref/update", {"key": key, "op": "name", "id": "L2", "value": "vessie ?"})["ok"]
+        m = json.loads(_get(srv, f"/ref?key={key}")[1])
+        assert m["dates_sorted"] == ["01/04/2026", "01/07/2026", "01/09/2026"] and "folder" not in m and m["folder_name"] == "refA"
+        assert [m["dates"][d]["values"]["L1"]["suv_max"] for d in m["dates_sorted"]] == [8.0, 6.0, 4.0]
+        assert [l["name"] for l in m["lesions"]] == ["rate", "vessie ?", "L3"] and m["lesions"][2]["vox"] == [42, 42, 34]
+        raw = (store.DIR / "patients" / f"{key}.json").read_text(encoding="utf-8")
+        assert "PH-0001" not in raw and "Fantôme" not in raw and "1950" not in raw
+        assert _get(srv, f"/data/delete?what=patient&key={key}")[0] == 400                      # confirmation exigée
+        assert _post(srv, "/ref/record", {"key": key}, site="cross-site") == 403
+        c = http.client.HTTPConnection("127.0.0.1", srv.server_port)
+        c.request("GET", f"/data/delete?what=all&confirm=1", headers={"Host": f"127.0.0.1:{srv.server_port}", "Sec-Fetch-Site": "cross-site"})
+        assert c.getresponse().status == 403                                                      # route qui change l'état
+        assert json.loads(_get(srv, "/data")[1])["patients"] == 1
+        assert json.loads(_get(srv, f"/data/delete?what=patient&key={key}&confirm=1")[1]) == {"deleted": 1}
+        assert json.loads(_get(srv, "/data")[1])["patients"] == 0
+    finally:
+        srv.shutdown()

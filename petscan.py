@@ -382,6 +382,78 @@ def measure_region(img, sr, sc, r, c, pct=50, radius_mm=8):
     return res
 
 
+URINARY = (6, 7, 8)  # reins et vessie : l'urine excrétée y passe
+
+
+def ureter_paths(labels, spacing):
+    """Trajets urétéraux approximatifs : segments (mm) du centre de chaque rein au centre de la vessie.
+    shortcut: droite rein -> vessie, pas l'uretère réel ; à remplacer si l'uretère est un jour segmenté."""
+    boxes = ndimage.find_objects(labels, max_label=max(URINARY))
+    com = {}
+    for oid in URINARY:
+        sl = boxes[oid - 1]
+        if sl is not None:
+            c = ndimage.center_of_mass(labels[sl] == oid)
+            com[oid] = np.array([(ci + s.start) * sp for ci, s, sp in zip(c, sl, spacing)])
+    return [(com[k], com[8]) for k in (6, 7) if k in com and 8 in com]
+
+
+def _seg_dist(p, a, b):
+    ab = b - a
+    t = np.clip(np.dot(p - a, ab) / (np.dot(ab, ab) or 1.0), 0, 1)
+    return float(np.linalg.norm(p - a - t * ab))
+
+
+def measure_at(suv, spacing, pos, factor=1.0, labels=None, ureters=(), radius_mm=12, grow_mm=60, pct=50,
+               excr_suv=20, excr_mm=20):
+    """Mesure d'une lésion mémorisée à la position pos (z,y,x), SANS seuil global : SUVmax dans une boule de radius_mm,
+    voxels des organes PHYSIO exclus (urine de la vessie, reins, cœur, cerveau) ; volume = voxels connexes >= pct % de ce max
+    (fenêtre ±grow_mm) ; SULpeak (boule de 1 cm³) dans ce volume ; organes à ≤ 5 mm (« au contact »). Drapeau « excrétion possible »
+    (la lésion reste mesurée) si le max dépasse excr_suv ou si le pic est à moins de excr_mm d'un rein, de la vessie ou
+    d'un trajet urétéral (`ureter_paths`). None si pos est hors du volume."""
+    pos = [int(round(p)) for p in pos]
+    if not all(0 <= p < n for p, n in zip(pos, suv.shape)):
+        return None
+    h = [int(np.ceil(grow_mm / s)) for s in spacing]
+    lo = [max(0, p - k) for p, k in zip(pos, h)]
+    sl = tuple(slice(l, p + k + 1) for l, p, k in zip(lo, pos, h))
+    w = suv[sl].astype(np.float32)  # copie
+    lab = labels[sl] if labels is not None else None
+    if lab is not None:
+        w[np.isin(lab, PHYSIO)] = 0
+    g = np.ogrid[tuple(slice(0, n) for n in w.shape)]
+    c = [p - l for p, l in zip(pos, lo)]
+    near = sum(((a - ci) * s) ** 2 for a, ci, s in zip(g, c, spacing)) <= radius_mm ** 2
+    vals = np.where(near, w, -np.inf)
+    pk = np.unravel_index(int(np.argmax(vals)), w.shape)
+    vmax = float(w[pk])
+    out = {"suv_max": vmax, "sul_max": vmax * factor, "peak": [int(a + l) for a, l in zip(pk, lo)],
+           "dist_mm": float(np.sqrt(sum(((a - ci) * s) ** 2 for a, ci, s in zip(pk, c, spacing)))), "flags": [], "contact": []}
+    if vmax <= 0:
+        out.update(sul_peak=0.0, vol_ml=0.0)
+        return out
+    rl, _ = ndimage.label(w >= pct / 100 * vmax)
+    region = rl == rl[pk]
+    out["vol_ml"] = float(region.sum() * np.prod(spacing) / 1000)
+    if any(np.take(region, [0, -1], axis=a).any() for a in range(3)):
+        out["flags"].append("volume limité à la fenêtre")
+    ker = _sphere(PEAK_R_MM, spacing, sub=5).astype(np.float32)
+    ker /= ker.sum()
+    box = tuple(slice(max(0, b.start - k // 2), b.stop + k // 2) for b, k in zip(ndimage.find_objects(region.astype(np.uint8))[0], ker.shape))
+    out["sul_peak"] = float(ndimage.correlate(w[box], ker, mode="nearest")[region[box]].max()) * factor
+    if lab is not None:
+        ring = ndimage.binary_dilation(region, iterations=max(1, round(5 / min(spacing)))) & ~region  # « au contact » : ≤ ~5 mm
+        out["contact"] = [ORGANS[int(k)][0] for k in np.unique(lab[ring]) if int(k) in ORGANS and k != 10]
+        pmm = np.array(out["peak"], float) * spacing
+        uri = np.argwhere(np.isin(lab, URINARY))
+        close = uri.size and float(np.sqrt((((uri - pk) * spacing) ** 2).sum(axis=1).min())) < excr_mm
+        if vmax > excr_suv or close or any(_seg_dist(pmm, a, b) < excr_mm for a, b in ureters):
+            out["flags"].append("excrétion possible")
+    elif vmax > excr_suv:
+        out["flags"].append("excrétion possible")
+    return out
+
+
 def measure_tolerance(img, sr, sc, r, c, tol=50):
     """Mesure sur le CT autour du pixel (r, c) : région connexe dont le HU est à ± tol du HU local
     (médiane 3x3). Un seuil de tolérance trop large fait « fuir » la région dans les tissus voisins de même densité."""

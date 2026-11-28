@@ -61,6 +61,11 @@ pytest -q
 - **Mix et différence** : A | B avec poignée de séparation, ou différence A − B (bleu = baisse, rouge = hausse).
 - **Évolution par lésion** : SUVmax B et Δ % dans le tableau.
 
+### Suivi multi-dates (carte de référence)
+- **Définir comme référence** : les points retenus (✓) deviennent la carte du patient (position DICOM et voxel, date, SUVmax/SULmax, SULpeak, volume à 50 % du max local, organe) ; ajout d'un point au clic, renommage, note, exclusion, retrait.
+- **Patient reconnu** à l'ouverture d'une séance ; « Appliquer le suivi » (jamais automatique) recale la séance sur la référence (squelette au CT, raffiné à ±15 mm par lésion), puis mesure chaque lésion à sa position, sans seuil global (voxels de la vessie, des reins, du cœur et du cerveau écartés ; ⚠ « excrétion possible » si max > 20 ou urine à < 20 mm, la lésion restant mesurée) et propose les nouvelles fixations.
+- **Tableau de suivi** : une colonne par date (n dates), Δ % du SUVmax vs référence et vs date précédente ; « Enregistrer cette date » ajoute les mesures (nombres seulement). MTV/TLG ne servent à aucun statut.
+
 ### Organes et export
 - **Segmentation d'organes** (approximative) : poumons (sans trachée), cœur, foie, rate (sans la maladie périsplénique hyperfixante), reins, vessie, cerveau, squelette, aorte thoracique descendante (référence pool sanguin PERCIST affichée si le foie est atteint) et liquide libre (ascite, approximatif), par règles CT + TEP, hors ligne. Seuls cœur, reins, vessie et cerveau sont exclus des mesures (marge 10 mm, 5 mm autour du cœur).
 - **Export PDF** : coupes avec mesures, infos patient, liste des mesures. Le PDF contient l'identité du patient : à partager avec précaution.
@@ -72,6 +77,7 @@ pytest -q
 
 ### Confidentialité
 - **Local uniquement** : serveur sur 127.0.0.1, contrôle de l'hôte, pas de journal des requêtes.
+- **Seule exception au « rien sur disque »** : un dossier unique (`~/.netscan`, à côté de `PETSCAN_CONFIG` sur Android) avec les cartes de référence pseudonymisées (empreinte salée de l'identifiant + naissance, jamais le nom, l'identifiant ni la naissance) et les réglages ; dossiers récents désactivés par défaut ; tout est listé et supprimable (aperçu, confirmation) dans le panneau « Données enregistrées », favoris du navigateur compris.
 
 ## Construire soi-même
 

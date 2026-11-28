@@ -27,6 +27,7 @@ Lancer depuis la racine : `viewer.py` relit `index.html` à chaque requête (rec
 - `organs.py` : segmentation d'organes heuristique (règles HU + SUV), approximative, réglée sur un CT injecté.
 - `export_pdf.py` : PDF A4 construit en mémoire à partir de l'état de la page.
 - `patient.py` : infos patient lues dans les en-têtes.
+- `store.py` : **seule écriture sur disque** (exception encadrée) : dossier unique `~/.netscan` (ou à côté de `PETSCAN_CONFIG`), écriture atomique, cartes de lésions de référence par patient pseudonymisé (SHA-256 salé de identifiant + naissance, jamais l'identité en clair), réglages et récents (désactivés par défaut), tout supprimable depuis le panneau « Données enregistrées ». Le suivi (`viewer.track`, `petscan.measure_at`) mesure aux positions mémorisées sans seuil global.
 
 ## Conventions à ne pas casser
 

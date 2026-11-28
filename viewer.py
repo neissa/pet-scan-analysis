@@ -22,15 +22,16 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
+import store
 from compare import estimate_shift, refine_shift, shift_volume
 from export_pdf import build_pdf
 from organs import ORGANS, segment_organs
 from patient import read_patient_info, read_sul
 from petscan import (_scaled, analyze, blood_pool_reference, ct_choices, ct_series, default_ct_uid, liver_reference, load_ct, load_suv,
-                     measure_region, measure_tolerance, sul_info)
+                     measure_at, measure_region, measure_tolerance, sul_info, ureter_paths)
+from store import recent, remember  # dossiers récents : désactivés par défaut, dans le dossier de données unique
 
 AXIS = {"axial": 0, "coronal": 1, "sagittal": 2}
-CONFIG = Path(os.environ.get("PETSCAN_CONFIG") or Path.home() / ".pet-scan-analysis.json")  # PETSCAN_CONFIG : appli Android ; dossiers récents, dans le dossier utilisateur (jamais dans le repo)
 BROWSE = importlib.util.find_spec("tkinter") is not None  # sélecteur de dossier natif disponible ?
 
 
@@ -272,20 +273,60 @@ def render_study(a, b, cmp, split, view, i, vmax, cmap, spacing, mode, alpha, bo
     return _png(out)
 
 
-# --- dossiers récents et sélecteur natif ---
-def recent():
-    try:
-        return json.loads(CONFIG.read_text(encoding="utf-8")).get("recent", [])
-    except (OSError, ValueError):
-        return []
+# --- suivi multi-dates : carte de lésions de référence mesurée à chaque séance ---
+def to_mm(vox, origin, spacing):
+    """Indice (z,y,x) -> coordonnées DICOM (x, y, z) en mm ; origin = (z0, y0, x0) en mm, None (démo) = 0."""
+    o = origin or (0.0, 0.0, 0.0)
+    return [o[2] + vox[2] * spacing[2], o[1] + vox[1] * spacing[1], o[0] + vox[0] * spacing[0]]
 
 
-def remember(folder):
-    r = [folder] + [f for f in recent() if f != folder]
-    try:
-        CONFIG.write_text(json.dumps({"recent": r[:8]}), encoding="utf-8")
-    except OSError:
-        pass
+def _vals(r):
+    """Ce qui est enregistré d'une mesure : des nombres et des drapeaux, jamais d'image."""
+    return None if r is None else {k: r[k] for k in ("suv_max", "sul_max", "sul_peak", "vol_ml", "dist_mm", "flags", "contact")}
+
+
+def local_shift(ct_ref, ctv, shift, vox, spacing):
+    """Décalage global raffiné autour du point vox (repère de référence) : squelette du CT dans ±40 mm, recherche à ±15 mm.
+    Peu d'os autour (score < 0,5) ou pas de CT : décalage global inchangé."""
+    d = tuple(int(s) for s in shift)
+    if ct_ref is None or ctv is None:
+        return d
+    c = tuple(min(max(int(v), 0), n - 1) for v, n in zip(vox, ct_ref.shape))
+    e, sc = refine_shift(ct_ref, ctv, (0, 0, 0), d, c, tuple(max(8, round(40 / s)) for s in spacing), step=1,
+                         margin=max(1, round(15 / min(spacing))))
+    return tuple(a + b for a, b in zip(d, e)) if sc >= 0.5 else d
+
+
+def track(m, suv, spacing, factor=1.0, labels=None, shift=(0, 0, 0), ct_ref=None, ctv=None, thr=None, vmin=0.1, cache=None):
+    """Mesure chaque lésion de la carte `m` à sa position mémorisée (indice de référence + décalage global `shift`, raffiné
+    par lésion sur le squelette du CT à ±15 mm si les deux CT sont là), sans re-détection par seuil (`measure_at`).
+    thr : propose aussi les nouvelles fixations (points >= thr d'au moins vmin ml, loin de toute lésion suivie).
+    cache : {id: décalage raffiné}, réutilisé d'un appel à l'autre. Retourne ({id: mesure ou None hors champ}, [nouvelles])."""
+    ure = ureter_paths(labels, spacing) if labels is not None else []
+    cache = {} if cache is None else cache
+    rows = {}
+    for les in m["lesions"]:
+        if les["id"] not in cache:
+            cache[les["id"]] = local_shift(ct_ref, ctv, shift, les["vox"], spacing)
+        r = measure_at(suv, spacing, [v + k for v, k in zip(les["vox"], cache[les["id"]])], factor, labels, ure)
+        if r:
+            r["shift"] = [int(v) for v in cache[les["id"]]]
+        rows[les["id"]] = r
+    new = []
+    if thr is not None:
+        sp = np.array(spacing)
+        # une lésion suivie couvre au moins 20 mm autour de son pic (davantage si elle est grosse)
+        found = [(np.array(r["peak"]), max(20.0, 10 * (3 * r["vol_ml"] / (4 * np.pi)) ** (1 / 3) + 10)) for r in rows.values() if r]
+        for les in analyze(suv, float(np.prod(spacing)) / 1000, thr, spacing, factor, labels):
+            p = np.array(les["peak"])
+            if les["mtv_ml"] < vmin or any(np.linalg.norm((p - f) * sp) < rad for f, rad in found):
+                continue
+            r = measure_at(suv, spacing, p, factor, labels, ure)
+            new.append({**_vals(r), "peak": r["peak"]})
+            found.append((np.array(r["peak"]), 20.0))
+            if len(new) >= 20:
+                break
+    return rows, new
 
 
 def _ask_folder():
@@ -321,9 +362,12 @@ class State:
         self.status, self.message = "idle", ""
         self.progress = self.cmp_progress = None  # avancement 0..1 du chargement en cours (None = inconnu)
         self._lock = threading.Lock()
+        self._refct = (None, None)  # (dossier, CT) de la séance de référence du suivi, relu une fois
 
-    def set(self, suv, spacing, ctv, patient=None, folder="", sul=None):
+    def set(self, suv, spacing, ctv, patient=None, folder="", sul=None, origin=None):
         self.sul = sul or sul_info(None, None, None)  # facteur SUV -> SUL ; repli SUV poids sans taille ni sexe
+        self.origin = origin  # (z0, y0, x0) en mm, coordonnées DICOM du voxel 0 ; None : démo
+        self.follow = None    # dernier suivi appliqué à cette séance : {key, shift, score, method, cache, rows}
         self._ref = (None, None)  # (clé, référence foie PERCIST) calculée à la demande
         self.organs = self.mips = self.cts = self.cmp = None
         self.cmp_status, self.cmp_message = "idle", ""
@@ -338,6 +382,17 @@ class State:
         if self._ref[0] != key:
             self._ref = (key, liver_reference(suv, labels, spacing, self.sul["factor"]))
         return self._ref[1]
+
+    def ref_ct(self, folder, spacing):
+        """CT de la séance de référence sur sa grille TEP, relu depuis son dossier puis gardé ; None si absent ou grille différente."""
+        if self._refct[0] != folder:
+            try:
+                suv, sp, origin = load_suv(folder)
+                ok = all(abs(a - b) <= 0.1 * a for a, b in zip(spacing, sp))
+                self._refct = (folder, load_ct(folder, suv.shape, sp, origin) if ok else None)
+            except (Exception, SystemExit):  # dossier déplacé ou sans TEP : suivi sans CT de référence
+                self._refct = (folder, None)
+        return self._refct[1]
 
     def _organs(self, vol, uid):
         cache = self._orgcache  # celui de ce dossier : si on change de dossier pendant le calcul, on n'y touche plus
@@ -488,7 +543,7 @@ class State:
         except Exception as e:
             self.status, self.message = "error", f"{type(e).__name__} : {e}"
         else:
-            self.set(suv, spacing, ctv, patient, folder, sul)
+            self.set(suv, spacing, ctv, patient, folder, sul, (float(origin[0][0]), origin[1], origin[2]))
             if series:
                 self.cts = {"series": series, "origin": origin, "choices": ct_choices(series, origin), "uid": uid}
                 self._ctcache[uid] = ctv
@@ -553,10 +608,34 @@ def make_handler(state):
         def do_GET(self):
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
-            if not self._allowed(u.path in ("/open", "/browse", "/ctseries", "/compare", "/autoalign")):
+            if not self._allowed(u.path in ("/open", "/browse", "/ctseries", "/compare", "/autoalign", "/data/delete", "/settings", "/follow")):
                 return self.send_error(403)
             vol = state.vol  # lu une seule fois : cohérent même si un chargement termine entre-temps
             try:
+                # --- données enregistrées (dossier unique de store.py) : inventaire sans identité, aperçu, suppression ---
+                if u.path == "/data":
+                    return self._json(store.inventory())
+                if u.path == "/data/preview":
+                    return self._json(store.preview(q["what"], q.get("key")))
+                if u.path == "/data/delete":
+                    if q.get("confirm") != "1":
+                        return self._json({"error": "Confirmation requise"}, 400)
+                    return self._json({"deleted": store.delete(q["what"], q.get("key"))})
+                if u.path == "/settings":
+                    store.set_config(recent_on=q["recent_on"] == "1")
+                    return self._json(store.config()["recent_on"])
+                if u.path == "/refs":  # références mémorisées et celle du patient courant (pseudonymes, jamais l'identité)
+                    cur = store.patient_key(vol[3]) if vol else None
+                    refs = [{"key": k, "ref_date": m["ref_date"], "n": len(m["lesions"]), "dates": sorted(m["dates"], key=store.date_key)}
+                            for k, m in store.maps()]
+                    return self._json({"current": cur if any(r["key"] == cur for r in refs) else None, "refs": refs})
+                if u.path == "/ref":
+                    m = store.load_map(q["key"])
+                    if not m:
+                        return self._json({"error": "Référence introuvable"})
+                    # le chemin du dossier de référence n'est montré que par son dernier segment
+                    return self._json({**{k: v for k, v in m.items() if k != "folder"}, "folder_name": Path(m.get("folder") or "").name,
+                                       "dates_sorted": sorted(m["dates"], key=store.date_key)})
                 if u.path == "/":
                     # relu à chaque requête : pas de redémarrage pour modifier la page
                     return self._send(Path(os.environ.get("PETSCAN_INDEX") or Path(__file__).with_name("index.html")).read_bytes(), "text/html; charset=utf-8")
@@ -613,6 +692,13 @@ def make_handler(state):
                     return self._json({"ob": [d + x for d, x in zip(db, e)], "e": list(e), "score": score})
                 if u.path == "/patient":
                     return self._json(patient)
+                if u.path == "/follow":
+                    try:
+                        return self._json(self._follow(vol, q["key"], float(q["thr"]) if q.get("thr") else None, float(q.get("vmin", 0.1))))
+                    except (KeyError, ValueError):
+                        raise
+                    except Exception as e:  # pas de trace (ni chemin) dans la console : un message pour la page
+                        return self._json({"error": f"Suivi impossible : {type(e).__name__}"})
                 if u.path == "/lesions":
                     org = state.organs  # organes pas encore calculés : pas de champs « organe » ni « physio », l'interface relance /lesions
                     if q["thr"] == "percist":  # seuil de la référence hépatique (SUL) ramené en SUV
@@ -690,12 +776,130 @@ def make_handler(state):
                                               self._off(q, "ob" if cmpd else "oa")))
                 return self.send_error(404)
             except (KeyError, ValueError):
+                if u.path.startswith(("/data", "/ref", "/follow", "/settings")):  # routes lues par la page en JSON
+                    return self._json({"error": "Requête invalide"}, 400)
                 return self.send_error(400)
+
+        def _session(self, vol):
+            """(organes ou None, date de l'examen, message d'erreur) de la séance courante, pour mesurer aux positions mémorisées."""
+            org = state.organs
+            if vol[2] is not None and org is None:  # sans organes, l'urine de la vessie et des reins ne serait pas écartée
+                return None, None, "Organes en cours de calcul : réessayez dans quelques secondes"
+            date = vol[3].get("Date de l'examen")
+            if not date:
+                return None, None, "Date de l'examen absente des en-têtes"
+            return (org[0] if org else None), date, None
+
+        def _follow(self, vol, key, thr, vmin):
+            """Applique la carte de référence `key` à la séance courante (recalage puis mesure de chaque lésion mémorisée)."""
+            m = store.load_map(key)
+            if not m:
+                return {"error": "Référence introuvable"}
+            suv, spacing, ctv, patient, folder = vol
+            labels, date, err = self._session(vol)
+            if err:
+                return {"error": err}
+            f = state.follow
+            if not (f and f["key"] == key and f["vol"] is suv):  # recalage global une seule fois par séance et par référence
+                ct_ref = None
+                if date == m["ref_date"]:
+                    shift, score, method = (0, 0, 0), None, "séance de référence"
+                else:
+                    ct_ref = state.ref_ct(m["folder"], spacing) if ctv is not None and m.get("folder") else None
+                    if ct_ref is not None:
+                        shift, score = estimate_shift(ct_ref, ctv)
+                        method = "squelette (CT)"
+                    else:  # dossier de référence absent ou sans CT : coordonnées DICOM seules
+                        o_ref, o_cur = m.get("origin") or (0, 0, 0), state.origin or (0, 0, 0)
+                        shift, score = tuple(round((a - b) / s) for a, b, s in zip(o_ref, o_cur, spacing)), None
+                        method = "coordonnées DICOM (CT de référence indisponible)"
+                f = state.follow = {"key": key, "vol": suv, "shift": tuple(int(s) for s in shift), "score": score, "method": method,
+                                    "ct_ref": ct_ref, "cache": {}}
+            rows, new = track(m, suv, spacing, state.sul["factor"], labels, f["shift"], f["ct_ref"], ctv, thr, vmin, f["cache"])
+            f["rows"], f["date"] = rows, date
+            return {"date": date, "ref_date": m["ref_date"], "shift_mm": [round(s * v, 1) for s, v in zip(f["shift"], spacing)],
+                    "score": f["score"], "method": f["method"], "unit": state.sul["unit"], "new": new,
+                    "rows": {k: r and {**_vals(r), "peak": r["peak"], "shift": r["shift"]} for k, r in rows.items()}}
+
+        def _ref_post(self, path, req, vol):
+            """Carte de référence : définition (/ref/define), modification (/ref/update), ajout d'une date (/ref/record)."""
+            suv, spacing, ctv, patient, folder = vol
+            labels, date, err = self._session(vol)
+            if err:
+                return {"error": err}
+            ure = ureter_paths(labels, spacing) if labels is not None else []
+            meas = lambda vox: measure_at(suv, spacing, vox, state.sul["factor"], labels, ure)
+            organ = lambda p: _organ_at_peak(labels, spacing, p) if labels is not None else None
+            text = lambda v: str(v or "")[:200]
+            if path == "/ref/define":
+                key = store.patient_key(patient, create=True)
+                if not key:
+                    return {"error": "Identifiant du patient absent des en-têtes : référence impossible"}
+                if store.load_map(key) and not req.get("replace"):
+                    return {"exists": True}
+                lesions, values = [], {}
+                for v in req["lesions"]:
+                    r = meas(v["vox"])
+                    if r is None:
+                        continue
+                    lid = f"L{len(lesions) + 1}"
+                    lesions.append({"id": lid, "name": text(v.get("name")) or lid, "note": "", "status": "valide", "vox": r["peak"],
+                                    "mm": to_mm(r["peak"], state.origin, spacing), "organe": organ(r["peak"]), "since": date})
+                    values[lid] = _vals(r)
+                store.save_map(key, {"version": 1, "ref_date": date, "folder": folder, "origin": list(state.origin or (0, 0, 0)),
+                                     "spacing": list(spacing), "unit": state.sul["unit"], "lesions": lesions,
+                                     "dates": {date: {"values": values}}})
+                state.follow = None
+                return {"key": key, "n": len(lesions)}
+            key = req["key"]
+            m = store.load_map(key)
+            if not m:
+                return {"error": "Référence introuvable"}
+            f = state.follow
+            followed = f and f["key"] == key and f["vol"] is suv and "rows" in f
+            if path == "/ref/record":
+                if date == m["ref_date"]:
+                    return {"error": "Cette séance est la référence : ses valeurs sont déjà enregistrées"}
+                if not followed:
+                    return {"error": "Appliquez d'abord le suivi à cette séance"}
+                m["dates"][date] = {"shift": list(f["shift"]), "score": f["score"], "values": {k: _vals(r) for k, r in f["rows"].items()}}
+            elif req["op"] == "add":  # point courant de la séance affichée (clic, ou nouvelle fixation validée)
+                cur = [int(v) for v in req["vox"]]
+                lid = f"L{1 + max([int(l['id'][1:]) for l in m['lesions']] or [0])}"
+                les = {"id": lid, "name": text(req.get("name")) or lid, "note": "", "status": "valide", "organe": organ(cur), "since": date}
+                if date == m["ref_date"]:
+                    r = meas(cur)
+                    if r is None:
+                        return {"error": "Point hors du volume"}
+                    les["vox"] = r["peak"]
+                    m["dates"][date]["values"][lid] = _vals(r)
+                elif followed:  # ramené dans le repère de la référence (décalage raffiné autour du point)
+                    d = local_shift(f["ct_ref"], ctv, f["shift"], [c - s for c, s in zip(cur, f["shift"])], spacing)
+                    les["vox"] = [c - s for c, s in zip(cur, d)]
+                else:
+                    return {"error": "Appliquez d'abord le suivi à cette séance"}
+                les["mm"] = to_mm(les["vox"], m.get("origin"), spacing)
+                m["lesions"].append(les)
+            else:
+                les = {l["id"]: l for l in m["lesions"]}[req["id"]]
+                if req["op"] == "remove":
+                    m["lesions"].remove(les)
+                    for d in m["dates"].values():
+                        d["values"].pop(les["id"], None)
+                elif req["op"] == "status" and req["status"] in ("valide", "exclu"):
+                    les["status"] = req["status"]
+                elif req["op"] in ("name", "note"):
+                    les[req["op"]] = text(req["value"])
+                else:
+                    raise ValueError("opération inconnue")
+            store.save_map(key, m)
+            return {"ok": True}
 
         def do_POST(self):
             if not self._allowed(True):
                 return self.send_error(403)
-            if urlparse(self.path).path != "/export.pdf":
+            path = urlparse(self.path).path
+            if path not in ("/export.pdf", "/ref/define", "/ref/update", "/ref/record"):
                 return self.send_error(404)
             vol = state.vol
             if vol is None:
@@ -706,6 +910,13 @@ def make_handler(state):
                 if not 0 < n <= 2_000_000:
                     return self.send_error(413)
                 req = json.loads(self.rfile.read(n))
+                if path != "/export.pdf":
+                    return self._json(self._ref_post(path, req, vol))
+            except (KeyError, ValueError, TypeError, AttributeError, IndexError) as e:
+                if path != "/export.pdf":
+                    return self._json({"error": f"Requête invalide : {type(e).__name__}"}, 400)
+                return self.send_error(400)
+            try:
                 st = req["state"]
                 if st["cmap"] not in CMAPS or st["mode"] not in ("pet", "fusion", "ct"):
                     raise ValueError("réglage inconnu")
@@ -738,8 +949,9 @@ def main():
     ap.add_argument("--port", type=int, default=8000)
     a = ap.parse_args()
     state = State()
-    if a.demo:
-        state.set(*demo())
+    if a.demo:  # patient fictif : permet d'essayer la carte de référence et le suivi
+        state.set(*demo(), patient={"Identifiant": "DEMO-0000", "Naissance": "01/01/1970", "Date de l'examen": "01/01/2026"})
+        threading.Thread(target=state._organs, args=(state.vol, None), daemon=True).start()  # le suivi attend les organes
     elif a.folder:
         state.open(a.folder)
     # 127.0.0.1 : données patient, jamais exposées au réseau
