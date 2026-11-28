@@ -467,6 +467,28 @@ def measure_tolerance(img, sr, sc, r, c, tol=50):
     return res
 
 
+def ct_diameter(ctv, spacing, pos, vol_ml=None, tol=50):
+    """Diamètres RECIST au CT dans le plan axial à la position pos (z,y,x) : plus grand diamètre et petit axe (étendue
+    perpendiculaire) de la région par tolérance HU (`measure_tolerance`). None sans CT ; {"why": raison} si la mesure n'est
+    pas fiable (densité non tissulaire, région non bornée ou qui fuit bien au-delà de la lésion TEP de volume vol_ml)."""
+    if ctv is None:
+        return None
+    z, y, x = (int(round(p)) for p in pos)
+    if not all(0 <= p < n for p, n in zip((z, y, x), ctv.shape)):
+        return {"why": "hors du CT"}
+    img = ctv[z]
+    r = measure_tolerance(img, spacing[1], spacing[2], y, x, tol)
+    if not -300 <= r["hu_ref"] <= 300:
+        return {"why": f"densité non tissulaire ({r['hu_ref']:.0f} HU)"}
+    edge = np.array(r["boundary"])
+    if ((edge == 0) | (edge == np.array(img.shape) - 1)).any():
+        return {"why": "région non bornée (atteint le bord de la coupe)"}
+    d_pet = 20 * (3 * vol_ml / (4 * np.pi)) ** (1 / 3) if vol_ml else None  # diamètre de la sphère de même volume
+    if r["length_mm"] > 300 or d_pet and r["length_mm"] > max(2.5 * d_pet, d_pet + 30):
+        return {"why": "région fuyante (tissus voisins de même densité)"}
+    return {"long_mm": round(r["length_mm"], 1), "short_mm": round(r["width_mm"], 1)}
+
+
 def _describe(mask, img, sr, sc):
     """Géométrie d'une région 2D : plus grand diamètre (Feret max), étendue perpendiculaire, contour, aire, valeurs."""
     edge = np.argwhere(mask & ~ndimage.binary_erosion(mask, border_value=0))

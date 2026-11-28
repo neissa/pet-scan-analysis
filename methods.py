@@ -62,5 +62,6 @@ def avis(m, dates, contexte=None):
     meth = REGISTRY.get(ch["methode"])
     if meth is None or meth.compare is None:
         return {"error": f"Méthode indisponible : {ch['methode']}"}
-    r = meth.compare({"date": m["ref_date"], "lesions": m["lesions"], "unit": m.get("unit")}, dates, contexte or {})
+    r = meth.compare({"date": m["ref_date"], "lesions": m["lesions"], "unit": m.get("unit"), "spacing": m.get("spacing")},
+                     dates, contexte or {})
     return {**r, "choix": ch, "methode": meth.nom, "mention": MENTION}

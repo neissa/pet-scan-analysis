@@ -28,7 +28,7 @@ from compare import estimate_shift, refine_shift, shift_volume
 from export_pdf import build_pdf
 from organs import ORGANS, segment_organs
 from patient import read_patient_info, read_sul
-from petscan import (_scaled, analyze, blood_pool_reference, ct_choices, ct_series, default_ct_uid, liver_reference, load_ct, load_suv,
+from petscan import (_scaled, analyze, blood_pool_reference, ct_choices, ct_diameter, ct_series, default_ct_uid, liver_reference, load_ct, load_suv,
                      measure_at, measure_region, measure_tolerance, sul_info, ureter_paths)
 from store import recent, remember  # dossiers récents : désactivés par défaut, dans le dossier de données unique
 
@@ -282,8 +282,17 @@ def to_mm(vox, origin, spacing):
 
 
 def _vals(r):
-    """Ce qui est enregistré d'une mesure : des nombres et des drapeaux, jamais d'image."""
-    return None if r is None else {k: r[k] for k in ("suv_max", "sul_max", "sul_peak", "vol_ml", "dist_mm", "flags", "contact")}
+    """Ce qui est enregistré d'une mesure : des nombres et des drapeaux, jamais d'image. "ct" : diamètres au CT (RECIST),
+    None sans CT ; absent des dates enregistrées avant leur mesure (« diamètre non enregistré »)."""
+    return None if r is None else {k: r[k] for k in ("suv_max", "sul_max", "sul_peak", "vol_ml", "dist_mm", "flags", "contact", "ct")
+                                   if k in r}
+
+
+def _with_ct(r, ctv, spacing):
+    """Ajoute à la mesure TEP r le diamètre au CT à son pic (`ct_diameter`)."""
+    if r is not None:
+        r["ct"] = ct_diameter(ctv, spacing, r["peak"], r.get("vol_ml"))
+    return r
 
 
 def local_shift(ct_ref, ctv, shift, vox, spacing):
@@ -309,7 +318,7 @@ def track(m, suv, spacing, factor=1.0, labels=None, shift=(0, 0, 0), ct_ref=None
     for les in m["lesions"]:
         if les["id"] not in cache:
             cache[les["id"]] = local_shift(ct_ref, ctv, shift, les["vox"], spacing)
-        r = measure_at(suv, spacing, [v + k for v, k in zip(les["vox"], cache[les["id"]])], factor, labels, ure)
+        r = _with_ct(measure_at(suv, spacing, [v + k for v, k in zip(les["vox"], cache[les["id"]])], factor, labels, ure), ctv, spacing)
         if r:
             r["shift"] = [int(v) for v in cache[les["id"]]]
         rows[les["id"]] = r
@@ -868,7 +877,7 @@ def make_handler(state):
             if err:
                 return {"error": err}
             ure = ureter_paths(labels, spacing) if labels is not None else []
-            meas = lambda vox: measure_at(suv, spacing, vox, state.sul["factor"], labels, ure)
+            meas = lambda vox: _with_ct(measure_at(suv, spacing, vox, state.sul["factor"], labels, ure), ctv, spacing)
             organ = lambda p: _organ_at_peak(labels, spacing, p) if labels is not None else None
             text = lambda v: str(v or "")[:200]
             if path == "/ref/define":
@@ -921,6 +930,8 @@ def make_handler(state):
                     return {"error": "Appliquez d'abord le suivi à cette séance"}
                 les["mm"] = to_mm(les["vox"], m.get("origin"), spacing)
                 m["lesions"].append(les)
+            elif req["op"] == "pe_non_cible":  # RECIST : progression sans équivoque des non-cibles, jugée par le lecteur
+                m["dates"][req["date"]]["pe_non_cible"] = bool(req["value"])
             else:
                 les = {l["id"]: l for l in m["lesions"]}[req["id"]]
                 if req["op"] == "remove":
@@ -929,6 +940,8 @@ def make_handler(state):
                         d["values"].pop(les["id"], None)
                 elif req["op"] == "status" and req["status"] in ("valide", "exclu"):
                     les["status"] = req["status"]
+                elif req["op"] == "ganglion":  # RECIST : ganglion mesuré au petit axe (aucun organe « ganglion » segmenté)
+                    les["ganglion"] = bool(req["value"])
                 elif req["op"] in ("name", "note"):
                     les[req["op"]] = text(req["value"])
                 else:

@@ -92,9 +92,8 @@ def test_registre_extensible_recist_declare(monkeypatch):
     assert {c["nom"] for c in cat["cancers"]} >= {"Sarcome desmoplastique à petites cellules rondes", "Autre / général"}
     assert all(c["defaut"] == "percist" for c in cat["cancers"])
     rec = next(m for m in cat["methodes"] if m["id"] == "recist11")
-    assert rec["disponible"] is False and rec["donnees"] == ["TEP", "CT"]
-    with pytest.raises(ValueError):
-        methods.choose("dsrct", "recist11")
+    assert rec["disponible"] is True and rec["donnees"] == ["TEP", "CT"]
+    assert methods.choose("dsrct", "recist11") == {"cancer": "dsrct", "methode": "recist11"}
     with pytest.raises(ValueError):
         methods.choose("inconnu", "percist")
     fake = Method("factice", "Factice", ("TEP",), ("general",), lambda ref, dates, ctx: {"statut": "OK", "details": [], "avertissements": []})
@@ -123,7 +122,7 @@ def test_choix_memorise_avec_le_patient_puis_supprime():
         assert a["statut"] == "RMP" and a["choix"] == {"cancer": "general", "methode": "percist"} and "pas un avis médical" in a["mention"]
         body = {"key": key, "op": "method", "cancer": "dsrct", "methode": "percist"}
         assert _post(srv, "/ref/update", body, site="cross-site") == 403
-        assert _post(srv, "/ref/update", {**body, "methode": "recist11"})["error"]
+        assert _post(srv, "/ref/update", {**body, "methode": "inconnue"})["error"]
         assert _post(srv, "/ref/update", body) == {"ok": True}
         assert json.loads(_get(srv, f"/ref?key={key}")[1])["analyse"] == {"cancer": "dsrct", "methode": "percist"}
         assert json.loads(_get(srv, f"/avis?key={key}")[1])["choix"]["cancer"] == "dsrct"

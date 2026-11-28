@@ -399,6 +399,13 @@ def test_reference_map_follow_three_dates_excretion_new_fixation_and_deletion():
         d = a["details"]                                   # L3 retenue le 01/09 = nouvelle lésion
         assert [x["statut"] for x in d] == ["MMS", "PMP"] and d[1]["nouvelles"] == ["L3"], a
         assert d[0]["exclues"] == ["vessie ? (excrétion possible)"] and d[1]["cible"] == ["rate", 4.0]
+        assert all("ct" in m["dates"][x]["values"]["L1"] for x in m["dates_sorted"])          # diamètre CT enregistré par date
+        assert _post(srv, "/ref/update", {"key": key, "op": "ganglion", "id": "L1", "value": True})["ok"]
+        assert _post(srv, "/ref/update", {"key": key, "op": "pe_non_cible", "date": "01/07/2026", "value": True})["ok"]
+        assert _post(srv, "/ref/update", {"key": key, "op": "method", "cancer": "general", "methode": "recist11"})["ok"]
+        a = json.loads(_get(srv, f"/avis?key={key}")[1])
+        assert a["methode"] == "RECIST 1.1" and a["tableau"]["colonnes"][0] == "Cible" and a["details"][0]["statut"] == "PE", a
+        assert json.loads(_get(srv, f"/ref?key={key}")[1])["lesions"][0]["ganglion"] is True
         raw = (store.DIR / "patients" / f"{key}.json").read_text(encoding="utf-8")
         assert "PH-0001" not in raw and "Fantôme" not in raw and "1950" not in raw
         assert _get(srv, f"/data/delete?what=patient&key={key}")[0] == 400                      # confirmation exigée

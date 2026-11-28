@@ -1324,6 +1324,7 @@ try { setInspHidden(localStorage.getItem("inspHidden") === "1"); } catch {}
 // --- Suivi multi-dates : carte de référence du patient (côté serveur, pseudonymisée), mesurée à chaque séance ---
 let fkey = null, fmap = null, fres = null;  // référence choisie, sa carte, dernier suivi appliqué à cette séance
 const n2 = v => v == null ? "—" : v.toFixed(2).replace(".", ",");
+const n1 = v => v == null ? "—" : v.toFixed(1).replace(".", ",");
 const ko = n => (n / 1024).toFixed(1).replace(".", ",") + " ko";
 const post = (path, obj) => fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) }).then(r => r.json());
 async function loadRefs() {
@@ -1355,16 +1356,19 @@ function renderFollow() {
   const cell = v => !v ? "<td>—</td>" : `<td title="SUVmax${sul ? " / SULmax" : ""} · SULpeak · volume à 50 % du max local` +
     (v.contact.length ? ` · au contact : ${esc(v.contact.join(", "))}` : "") + (v.dist_mm > 6 ? ` · pic à ${v.dist_mm.toFixed(0)} mm de la position attendue` : "") + `">` +
     `${n2(v.suv_max)}${sul ? " / " + n2(v.sul_max) : ""}<br><small>pk ${n2(v.sul_peak)} · ${v.vol_ml.toFixed(1).replace(".", ",")} ml</small>` +
-    (v.flags.length ? `<br><small class="warn">⚠ ${esc(v.flags.join(", "))}</small>` : "") + "</td>";
+    (v.flags.length ? `<br><small class="warn">⚠ ${esc(v.flags.join(", "))}</small>` : "") +
+    (!("ct" in v) ? "" : !v.ct ? "<br><small>CT : —</small>" : v.ct.why ? `<br><small title="${esc(v.ct.why)}">CT : non mesurable</small>`
+      : `<br><small title="Diamètres au CT (plan axial, tolérance HU) : plus grand × petit axe">CT ${n1(v.ct.long_mm)} × ${n1(v.ct.short_mm)} mm</small>`) + "</td>";
   const pct = (a, b) => a && b && b.suv_max >= 0.5 ? (a.suv_max - b.suv_max) / b.suv_max * 100 : null;
   const dl = v => v == null ? "<td>—</td>" : `<td class="${v > 25 ? "up" : v < -25 ? "down" : ""}">${v > 0 ? "+" : ""}${v.toFixed(0)}</td>`;
   $("ftbl").innerHTML = `<tr><th>Lésion</th>${cols.map(c => `<th>${esc(c.d)}</th>`).join("")}<th>Δ % réf.</th><th>Δ % préc.</th><th></th></tr>` +
     fmap.lesions.map((l, i) => {
       const vs = cols.map(c => c.vals[l.id]), k = vs.map((v, j) => v ? j : -1).filter(j => j >= 0), last = vs[k[k.length - 1]];
       return `<tr class="les${l.status === "exclu" ? " excl" : ""}" data-i="${i}" tabindex="0" title="${esc(l.note || "Aller à cette lésion")}">` +
-        `<td>${esc(l.name)}<br><small>${esc(l.organe || "")}${l.since !== fmap.ref_date ? " · depuis " + esc(l.since) : ""}</small></td>` +
+        `<td>${esc(l.name)}<br><small>${esc(l.organe || "")}${l.ganglion ? " · ganglion" : ""}${l.since !== fmap.ref_date ? " · depuis " + esc(l.since) : ""}</small></td>` +
         vs.map(cell).join("") + dl(k.length > 1 ? pct(last, vs[0]) : null) + dl(k.length > 1 ? pct(last, vs[k[k.length - 2]]) : null) +
         `<td class="ok"><button data-op="name" title="Renommer">✎</button><button data-op="note" title="Note libre">N</button>` +
+        `<button data-op="ganglion" aria-pressed="${!!l.ganglion}" title="${l.ganglion ? "Ganglion (RECIST : petit axe) : retirer" : "Marquer comme ganglion (RECIST : petit axe)"}">G</button>` +
         `<button data-op="status" title="${l.status === "exclu" ? "Valider" : "Exclure"}">${l.status === "exclu" ? "✓" : "✗"}</button><button data-op="remove" title="Retirer de la carte">×</button></td></tr>`;
     }).join("");
   for (const tr of $("ftbl").querySelectorAll("tr.les")) {
@@ -1429,7 +1433,8 @@ async function editLesion(l, op) {
     const v = prompt(op === "name" ? "Nom de la lésion" : "Note libre", l[op] || "");
     if (v === null) return;
     body.value = v;
-  } else if (op === "status") body.status = l.status === "exclu" ? "valide" : "exclu";
+  } else if (op === "ganglion") body.value = !l.ganglion;
+  else if (op === "status") body.status = l.status === "exclu" ? "valide" : "exclu";
   else if (!confirm(`Retirer ${l.name} de la carte (et ses mesures de toutes les dates) ?`)) return;
   const r = await post("/ref/update", body);
   if (r.error) $("fmsg").textContent = r.error;
@@ -1459,8 +1464,17 @@ async function renderAnalyse() {
   if (a.error) return $("favis").innerHTML = `<p class="warn">${esc(a.error)}</p>`;
   $("favis").innerHTML = `<p><b>${esc(a.libelle)}</b> (${esc(a.statut)}) · ${esc(a.methode)}</p>` +
     a.details.map(d => `<p class="hint"><b>${esc(d.date)}${d.provisoire ? " (cette séance, non enregistrée)" : ""}</b> : ${esc(d.libelle)}. ${esc(d.texte)}` +
-      (d.exclues.length ? `<br>Exclues du calcul : ${esc(d.exclues.join(", "))}` : "") + "</p>").join("") +
+      (d.exclues.length ? `<br>Exclues du calcul : ${esc(d.exclues.join(", "))}` : "") +
+      ("pe_non_cible" in d && !d.provisoire ? `<br><label><input type="checkbox" data-pe="${esc(d.date)}"${d.pe_non_cible ? " checked" : ""}> ` +
+        "Progression sans équivoque des non-cibles (jugement du lecteur)</label>" : "") + "</p>").join("") +
+    (a.tableau ? `<table><tr>${a.tableau.colonnes.map(c => `<th>${esc(c)}</th>`).join("")}</tr>` +
+      a.tableau.lignes.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("") + "</table>" : "") +
     a.avertissements.map(w => `<p class="warn">⚠ ${esc(w)}</p>`).join("") + `<p class="note">${esc(a.mention)}</p>`;
+  for (const cb of $("favis").querySelectorAll("input[data-pe]")) cb.onchange = async () => {
+    const r = await post("/ref/update", { key: fkey, op: "pe_non_cible", date: cb.dataset.pe, value: cb.checked });
+    if (r.error) $("fmsg").textContent = r.error;
+    await renderAnalyse();
+  };
 }
 function fillMethods(sel) {
   const c = $("fcancer").value, cat = mcat.cancers.find(x => x.id === c);
