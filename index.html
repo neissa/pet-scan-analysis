@@ -1467,7 +1467,7 @@ async function renderAnalyse() {
   if (a.error) return $("favis").innerHTML = `<p class="warn">${esc(a.error)}</p>`;
   $("favis").innerHTML = `<p><b>${esc(a.libelle)}</b> (${esc(a.statut)}) · ${esc(a.methode)}</p>` +
     a.details.map(d => `<p class="hint"><b>${esc(d.date)}${d.provisoire ? " (cette séance, non enregistrée)" : ""}</b> : ${esc(d.libelle)}. ${esc(d.texte)}` +
-      (d.exclues.length ? `<br>Exclues du calcul : ${esc(d.exclues.join(", "))}` : "") +
+      (d.exclues.length ? `<br>Exclues du calcul : ${esc(d.exclues.join(", "))}` : "") + hetero(d.heterogeneite) +
       ("pe_non_cible" in d && !d.provisoire ? `<br><label><input type="checkbox" data-pe="${esc(d.date)}"${d.pe_non_cible ? " checked" : ""}> ` +
         "Progression sans équivoque des non-cibles (jugement du lecteur)</label>" : "") + "</p>").join("") +
     (a.tableau ? `<table><tr>${a.tableau.colonnes.map(c => `<th>${esc(c)}</th>`).join("")}</tr>` +
@@ -1478,6 +1478,13 @@ async function renderAnalyse() {
     if (r.error) $("fmsg").textContent = r.error;
     await renderAnalyse();
   };
+}
+// Réponse hétérogène par lésion (SULpeak vs référence, seuils PERCIST), calculée par le serveur pour chaque date.
+function hetero(h) {
+  if (!h) return "";
+  const n = h.comptes, l = (k, t) => n[k] ? `${n[k]} ${t}` + ` (${esc(h[k].join(", "))})` : `0 ${t}`;
+  return `<br>Lésions : ${l("baisse", "en baisse")}, ${l("stable", n.stable > 1 ? "stables" : "stable")}, ${l("hausse", "en hausse")}` +
+    (n.non_evaluable ? `, ${l("non_evaluable", "non évaluable(s)")}` : "") + (h.mixte ? ` <b class="warn">⚠ réponse mixte</b>` : "");
 }
 function fillMethods(sel) {
   const c = $("fcancer").value, cat = mcat.cancers.find(x => x.id === c);

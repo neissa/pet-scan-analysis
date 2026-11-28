@@ -28,6 +28,7 @@ def register(m):
 
 
 import method_percist  # noqa: E402  (METHOD = dict des champs de Method : pas d'import circulaire)
+from method_percist import _why  # noqa: E402
 import method_recist  # noqa: E402
 
 for _mod in (method_percist, method_recist):
@@ -55,6 +56,34 @@ def choose(cancer, methode):
     return {"cancer": cancer, "methode": methode}
 
 
+def heterogeneite(ref, dates):
+    """Réponse hétérogène, commune aux méthodes : à chaque date, chaque lésion de référence retenue (hors excrétion/contact,
+    comme PERCIST) classée en baisse / stable / hausse d'après son SULpeak (SULmax sous 1 ml) vs référence, mêmes seuils que
+    PERCIST (≥ 30 % et ≥ 0,8). « Mixte » : au moins une en baisse et une en hausse. {date: {...}}"""
+    r0 = ref["date"]
+    base = (dates.get(r0) or {}).get("values", {})
+    out = {}
+    for d, e in dates.items():
+        if d == r0:
+            continue
+        cat = {"baisse": [], "stable": [], "hausse": [], "non_evaluable": []}
+        for l in ref["lesions"]:
+            if l.get("status") != "valide" or l.get("since", r0) != r0:
+                continue
+            vb, vc = base.get(l["id"]), e["values"].get(l["id"])
+            if _why(vb) or _why(vc):
+                continue
+            if not vb or not vc:
+                cat["non_evaluable"].append(l["name"])
+                continue
+            k = "sul_peak" if min(vb["vol_ml"], vc["vol_ml"]) >= 1.0 else "sul_max"
+            dabs = vc[k] - vb[k]
+            pct = dabs / vb[k] * 100 if vb[k] > 0 else 0.0
+            cat["hausse" if pct >= 30 and dabs >= 0.8 else "baisse" if pct <= -30 and dabs <= -0.8 else "stable"].append(l["name"])
+        out[d] = {**cat, "comptes": {k: len(v) for k, v in cat.items()}, "mixte": bool(cat["baisse"] and cat["hausse"])}
+    return out
+
+
 def avis(m, dates, contexte=None):
     """Avis de statut de la carte `m` (store) ; dates : {date: mesures} dans l'ordre chronologique, référence comprise.
     Sans choix mémorisé : type « Autre / général » et sa méthode par défaut."""
@@ -62,6 +91,10 @@ def avis(m, dates, contexte=None):
     meth = REGISTRY.get(ch["methode"])
     if meth is None or meth.compare is None:
         return {"error": f"Méthode indisponible : {ch['methode']}"}
-    r = meth.compare({"date": m["ref_date"], "lesions": m["lesions"], "unit": m.get("unit"), "spacing": m.get("spacing")},
-                     dates, contexte or {})
+    ref = {"date": m["ref_date"], "lesions": m["lesions"], "unit": m.get("unit"), "spacing": m.get("spacing")}
+    r = meth.compare(ref, dates, contexte or {})
+    het = heterogeneite(ref, dates)
+    for x in r.get("details", []):
+        if x["date"] in het:
+            x["heterogeneite"] = het[x["date"]]
     return {**r, "choix": ch, "methode": meth.nom, "mention": MENTION}

@@ -87,6 +87,52 @@ def test_non_evaluable():
     assert run([les("L1", status="exclu")], {"L1": v(10)}, {"L1": v(20)})["statut"] == "NE"
 
 
+def run3(lesions, *vals):
+    ds = [R, D, "01/10/2026", "01/01/2027"][:len(vals)]
+    dates = {d: {"values": x, "acq": ACQ, "liver": LIV, "unit": "SUL"} for d, x in zip(ds, vals)}
+    return methods.avis({"ref_date": R, "lesions": lesions, "unit": "SUL"}, dates)
+
+
+def test_nadir_percist_baisse_puis_remontee_sans_changer_le_statut():
+    r = run3([les("L1")], {"L1": v(10)}, {"L1": v(5)}, {"L1": v(7)})
+    d1, d2 = r["details"]
+    assert d1["nadir"] == [R, 10] and d1["remontee_nadir"] is False
+    assert d2["nadir"] == [D, 5] and round(d2["variation_nadir_pct"]) == 40 and d2["remontee_nadir"] is True
+    assert d2["statut"] == "RMP" and r["statut"] == "RMP"                  # officiel : -30 % vs référence, inchangé
+    assert "remontée depuis le nadir" in d2["texte"] and any("remontée depuis le nadir" in w for w in r["avertissements"])
+    lig = {x[0]: x[1:] for x in r["tableau"]["lignes"]}
+    assert r["tableau"]["colonnes"] == ["Cible", R, D, "01/10/2026"] and "⚠ remontée" in lig["% vs nadir"][2]
+    r = run3([les("L1")], {"L1": v(10)}, {"L1": v(5)}, {"L1": v(5.5)})    # +10 % : pas de remontée
+    assert r["details"][1]["remontee_nadir"] is False and not any("nadir" in w for w in r["avertissements"])
+
+
+def test_nadir_exclusion_et_sans_lesion():
+    ref = {"L1": v(10), "L2": v(30, flags=["excrétion possible"])}
+    r = run3([les("L1"), les("L2")], ref, {"L1": v(5), "L2": v(2, flags=["excrétion possible"])}, {"L1": v(7), "L2": v(60)})
+    assert r["details"][1]["nadir"] == [D, 5] and r["details"][1]["reference"][0] == "L1"
+    r = run3([], {}, {}, {})
+    assert [x["statut"] for x in r["details"]] == ["NE", "NE"] and "nadir" not in r["details"][0]
+    assert r["details"][0]["heterogeneite"]["comptes"] == {"baisse": 0, "stable": 0, "hausse": 0, "non_evaluable": 0}
+
+
+def test_heterogeneite_mixte_baisse_non_evaluable():
+    lesions = [les("L1"), les("L2"), les("L3"), les("L4"), les("L5")]
+    ref = {"L1": v(10), "L2": v(4), "L3": v(6), "L4": v(5, contact=["Vessie"]), "L5": v(8)}
+    h = run3(lesions, ref, {"L1": v(5), "L2": v(9), "L3": v(6.5), "L4": v(1)})["details"][0]["heterogeneite"]
+    assert (h["baisse"], h["stable"], h["hausse"], h["non_evaluable"]) == (["L1"], ["L3"], ["L2"], ["L5"]) and h["mixte"] is True
+    assert h["comptes"] == {"baisse": 1, "stable": 1, "hausse": 1, "non_evaluable": 1}
+    h = run3(lesions[:3], ref, {"L1": v(5), "L2": v(2), "L3": v(3)})["details"][0]["heterogeneite"]
+    assert h["comptes"]["baisse"] == 3 and h["mixte"] is False
+    h = run3([les("L1")], {"L1": v(2.0)}, {"L1": v(1.3)})["details"][0]["heterogeneite"]   # -35 % mais -0,7 : stable
+    assert h["stable"] == ["L1"]
+
+
+def test_heterogeneite_aussi_pour_recist():
+    m = {"ref_date": R, "lesions": [les("L1"), les("L2")], "analyse": {"cancer": "general", "methode": "recist11"}}
+    r = methods.avis(m, {R: {"values": {"L1": v(10), "L2": v(4)}}, D: {"values": {"L1": v(5), "L2": v(9)}}})
+    assert r["details"][0]["heterogeneite"]["mixte"] is True
+
+
 def test_registre_extensible_recist_declare(monkeypatch):
     cat = methods.catalog()
     assert {c["nom"] for c in cat["cancers"]} >= {"Sarcome desmoplastique à petites cellules rondes", "Autre / général"}

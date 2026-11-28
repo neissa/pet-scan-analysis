@@ -112,7 +112,24 @@ def _date(d, e, r0, base, valid, warns):
     if grow:
         txt += " ; croissance nette (volume ≥ +75 % et ≥ +1 ml) : " + ", ".join(grow)
     return {**out, "statut": st, "libelle": LIBELLES[st], "metrique": unit, "reference": [tb[0], b], "cible": [tc[0], c],
-            "variation_pct": dpct, "variation_abs": dabs, "croissance": grow, "texte": txt}
+            "variation_pct": dpct, "variation_abs": dabs, "croissance": grow, "texte": txt,
+            "_t": {k: max(v[k] for _, v in cur) for k in ("sul_peak", "sul_max")}}
+
+
+def _nadir(x, hist, warns):
+    """Nadir de la cible (plus basse valeur depuis la référence incluse, dans la métrique de cette date) et remontée
+    ≥ 30 % et ≥ 0,8 depuis ce nadir : signalée, sans changer le statut officiel (calculé vs référence)."""
+    k = "sul_peak" if x["metrique"] == "SULpeak" else "sul_max"
+    nd, nv = min([(hist[0][0], x["reference"][1])] + [(d, t[k]) for d, t in hist[1:]], key=lambda t: t[1])
+    c = x["cible"][1]
+    dabs, dpct = c - nv, ((c - nv) / nv * 100 if nv > 0 else 0.0)
+    up = dpct >= 30 and dabs >= 0.8
+    x.update(nadir=[nd, nv], variation_nadir_pct=dpct, variation_nadir_abs=dabs, remontee_nadir=up)
+    x["texte"] += f" ; vs nadir ({nd}, {f2(nv)}) : {dpct:+.0f} %, {'+' if dabs >= 0 else ''}{f2(dabs)}"
+    if up:
+        x["texte"] += " : remontée depuis le nadir"
+        warns.append(f"{x['date']} : remontée depuis le nadir ({nd}, {f2(nv)} → {f2(c)}, {dpct:+.0f} %) ; "
+                     "statut PERCIST officiel inchangé (calculé vs référence)")
 
 
 def compare(ref, dates, ctx):
@@ -124,15 +141,28 @@ def compare(ref, dates, ctx):
     valid = [l for l in ref["lesions"] if l.get("status") == "valide"]
     if any((e.get("unit") or ref.get("unit")) != "SUL" for e in dates.values()):
         warns.append("SUL de repli (SUV poids) pour au moins une date : taille ou sexe absents des en-têtes")
-    details = []
+    details, hist = [], [(r0, None)]
     for d, e in dates.items():
         if d != r0:
             warns += _acq(base.get("acq"), e.get("acq"), d)
-            details.append(_date(d, e, r0, base, valid, warns))
+            x = _date(d, e, r0, base, valid, warns)
+            t = x.pop("_t", None)
+            if t and date_key(d) > date_key(r0):  # nadir : depuis la référence incluse
+                _nadir(x, hist, warns)
+                hist.append((d, t))
+            details.append(x)
     if not details:
         warns.append("Aucune date de suivi : appliquez le suivi à une autre séance")
     last = details[-1] if details else {"statut": "NE"}
-    return {"statut": last["statut"], "libelle": LIBELLES[last["statut"]], "details": details,
+    pc = lambda x, k: f"{x[k]:+.0f} %" if k in x else "—"
+    tab = {"colonnes": ["Cible", r0] + [x["date"] for x in details],
+           "lignes": [["Valeur (SULpeak / SULmax)", next((f2(x["reference"][1]) for x in details if "reference" in x), "—")] +[f"{x['metrique']} {f2(x['cible'][1])}" if "cible" in x else "—" for x in details],
+                      ["% vs référence", "—"] + [pc(x, "variation_pct") for x in details],
+                      ["Nadir", "—"] + [f"{f2(x['nadir'][1])} ({x['nadir'][0]})" if "nadir" in x else "—" for x in details],
+                      ["% vs nadir", "—"] + [pc(x, "variation_nadir_pct") + (" ⚠ remontée" if x.get("remontee_nadir") else "")
+                                             for x in details],
+                      ["Statut", "référence"] + [x["statut"] for x in details]]}
+    return {"statut": last["statut"], "libelle": LIBELLES[last["statut"]], "details": details, "tableau": tab,
             "avertissements": list(dict.fromkeys(warns))}
 
 
