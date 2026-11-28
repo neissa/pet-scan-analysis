@@ -29,7 +29,8 @@ from export_pdf import build_pdf
 from organs import ORGANS, segment_organs
 from patient import read_patient_info, read_sul
 from petscan import (_scaled, analyze, blood_pool_reference, ct_choices, ct_diameter, ct_series, default_ct_uid, liver_reference, load_ct, load_suv,
-                     measure_at, measure_region, measure_tolerance, sul_info, ureter_paths)
+                     _seg_dist, measure_at, measure_region, measure_tolerance, sul_info, ureter_paths)
+import relevance
 from store import recent, remember  # dossiers récents : désactivés par défaut, dans le dossier de données unique
 
 AXIS = {"axial": 0, "coronal": 1, "sagittal": 2}
@@ -295,6 +296,14 @@ def _with_ct(r, ctv, spacing):
     return r
 
 
+def _hu_at(ctv, peak):
+    """Densité CT médiane (3 × 3 × 3 voxels) au pic, pour l'indice de pertinence ; None sans CT."""
+    return None if ctv is None else float(np.median(ctv[tuple(slice(max(0, p - 1), p + 2) for p in peak)]))
+
+
+NEW_SCAN, NEW_MAX = 100, 30  # nouvelles fixations : mesurées (par SUVmax décroissant), puis affichées (par pertinence)
+
+
 def local_shift(ct_ref, ctv, shift, vox, spacing):
     """Décalage global raffiné autour du point vox (repère de référence) : squelette du CT dans ±40 mm, recherche à ±15 mm.
     Peu d'os autour (score < 0,5) ou pas de CT : décalage global inchangé."""
@@ -308,13 +317,15 @@ def local_shift(ct_ref, ctv, shift, vox, spacing):
 
 
 def track(m, suv, spacing, factor=1.0, labels=None, shift=(0, 0, 0), ct_ref=None, ctv=None, thr=None, vmin=0.1, cache=None,
-          ref_spacing=None):
+          ref_spacing=None, liver=None):
     """Mesure chaque lésion de la carte `m` à sa position mémorisée (indice de référence + décalage global `shift`, raffiné
     par lésion sur le squelette du CT à ±15 mm si les deux CT sont là), sans re-détection par seuil (`measure_at`).
     thr : propose aussi les nouvelles fixations (points >= thr d'au moins vmin ml, loin de toute lésion suivie).
     cache : {id: décalage raffiné}, réutilisé d'un appel à l'autre. ref_spacing : espacement de la grille de la référence s'il
     diffère (positions converties en mm sur l'espacement de cette séance, ct_ref déjà `resample`-é ; SUV mesurées sur la
-    grille native, jamais interpolées). Retourne ({id: mesure ou None hors champ}, [nouvelles])."""
+    grille native, jamais interpolées). liver : SUL moyen de la référence foie (indice de pertinence des nouvelles).
+    Retourne ({id: mesure ou None hors champ}, [nouvelles, par pertinence décroissante], nombre de nouvelles détectées) ;
+    seules les NEW_SCAN plus intenses (SUVmax) sont mesurées et triées."""
     ure = ureter_paths(labels, spacing) if labels is not None else []
     cache = {} if cache is None else cache
     rows = {}
@@ -327,7 +338,7 @@ def track(m, suv, spacing, factor=1.0, labels=None, shift=(0, 0, 0), ct_ref=None
         if r:
             r["shift"] = [int(v) for v in cache[les["id"]]]
         rows[les["id"]] = r
-    new = []
+    new, total = [], 0
     if thr is not None:
         sp = np.array(spacing)
         # une lésion suivie couvre au moins 20 mm autour de son pic (davantage si elle est grosse)
@@ -336,12 +347,13 @@ def track(m, suv, spacing, factor=1.0, labels=None, shift=(0, 0, 0), ct_ref=None
             p = np.array(les["peak"])
             if les["mtv_ml"] < vmin or any(np.linalg.norm((p - f) * sp) < rad for f, rad in found):
                 continue
+            total += 1
+            if len(new) >= NEW_SCAN:  # shortcut: au-delà, comptées sans être mesurées ni dédoublonnées entre elles
+                continue
             r = measure_at(suv, spacing, p, factor, labels, ure)
-            new.append({**_vals(r), "peak": r["peak"]})
+            new.append(relevance.annotate({**_vals(r), "peak": r["peak"]}, {"foie": liver, "hu": _hu_at(ctv, r["peak"])}))
             found.append((np.array(r["peak"]), 20.0))
-            if len(new) >= 20:
-                break
-    return rows, new
+    return rows, sorted(new, key=lambda n: -n["pertinence"]), total
 
 
 def _ask_folder():
@@ -734,6 +746,14 @@ def make_handler(state):
                     if org is not None:
                         for lesion in les:
                             lesion["organe"] = _organ_at_peak(org[0], spacing, lesion["peak"])
+                    # indice de pertinence : foie, CT au pic, trajet urétéral (< 20 mm, comme `measure_at`), lésion suivie à ≤ 15 mm
+                    foie, sp = self._liver_mean(vol, org[0] if org is not None else None), np.array(spacing)
+                    ure, sui = ureter_paths(org[0], spacing) if org is not None else [], self._suivi(vol, sp)
+                    for lesion in les:
+                        pmm = np.array(lesion["peak"]) * sp
+                        relevance.annotate(lesion, {"foie": foie, "hu": _hu_at(ctv, lesion["peak"]),
+                                                    "excretion": any(_seg_dist(pmm, a, b) < 20 for a, b in ure),
+                                                    "suivi": next((c for p, c in sui if np.linalg.norm(p - pmm) <= 15), None)})
                     rel =tuple(b - a for a, b in zip(self._off(q, "oa"), self._off(q, "ob")))  # B relativement à A
                     return self._json(_add_b(les, state.cmp["suv"], spacing, rel=rel) if state.cmp else les)
                 if u.path == "/percist":  # unité (SUL ou repli SUV) et référence hépatique ; les lésions restent dans /lesions
@@ -842,16 +862,39 @@ def make_handler(state):
                         method = "coordonnées DICOM (CT de référence indisponible)"
                 f = state.follow = {"key": key, "vol": suv, "shift": tuple(int(s) for s in shift), "score": score, "method": method,
                                     "ct_ref": ct_ref, "cache": {}}
-            rows, new = track(m, suv, spacing, state.sul["factor"], labels, f["shift"], f["ct_ref"], ctv, thr, vmin, f["cache"],
-                              sp_ref if regrid else None)
+            rows, new, total = track(m, suv, spacing, state.sul["factor"], labels, f["shift"], f["ct_ref"], ctv, thr, vmin, f["cache"],
+                                     sp_ref if regrid else None, self._liver_mean(vol, labels))
             f["rows"], f["date"] = rows, date
             mm = lambda sp: " × ".join(f"{v:.2f}".replace(".", ",") for v in sp)
             warn = (f"Grille différente de la référence ({mm(sp_ref)} → {mm(spacing)} mm) : CT de référence rééchantillonné "
                     "(linéaire) pour le recalage et positions converties en mm ; SUV mesurées sur la grille native de cette séance "
                     "(non interpolées), mais SUVmax et volume dépendent de la taille du voxel (volume partiel)") if regrid else None
             return {"warning": warn, "date": date, "ref_date": m["ref_date"], "shift_mm": [round(s * v, 1) for s, v in zip(f["shift"], spacing)],
-                    "score": f["score"], "method": f["method"], "unit": state.sul["unit"], "new": new,
+                    "score": f["score"], "method": f["method"], "unit": state.sul["unit"], "new": new[:NEW_MAX], "new_total": total,
                     "rows": {k: r and {**_vals(r), "peak": r["peak"], "shift": r["shift"]} for k, r in rows.items()}}
+
+        def _liver_mean(self, vol, labels):
+            """SUL moyen de la référence foie (indice de pertinence) ; None sans organes ou sans foie exploitable."""
+            try:
+                ref = labels is not None and state.liver_ref(vol[0], labels, vol[1])
+            except Exception:
+                ref = None
+            return ref["mean"] if ref else None
+
+        def _suivi(self, vol, spacing):
+            """Lésions de la carte suivie appliquée à cette séance : [(pic, ctx suivi de l'indice de pertinence)]."""
+            f = state.follow
+            m = f and f["vol"] is vol[0] and "rows" in f and store.load_map(f["key"])
+            if not m:
+                return []
+            out = []
+            for l in m["lesions"]:
+                r = f["rows"].get(l["id"])
+                if r:
+                    n = sum(1 for d, e in m["dates"].items() if d != f["date"] and (e.get("values") or {}).get(l["id"])) + 1
+                    out.append((np.array(r["peak"]) * spacing, {"status": l.get("status"), "dates": n,
+                                                                "ref": l.get("since", m["ref_date"]) == m["ref_date"]}))
+            return out
 
         def _cond(self, vol, labels):
             """Conditions de la séance enregistrées avec ses mesures (comparabilité des dates) : en-têtes d'acquisition sans
