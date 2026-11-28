@@ -22,6 +22,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
+import methods
 import store
 from compare import estimate_shift, refine_shift, shift_volume
 from export_pdf import build_pdf
@@ -629,6 +630,15 @@ def make_handler(state):
                     refs = [{"key": k, "ref_date": m["ref_date"], "n": len(m["lesions"]), "dates": sorted(m["dates"], key=store.date_key)}
                             for k, m in store.maps()]
                     return self._json({"current": cur if any(r["key"] == cur for r in refs) else None, "refs": refs})
+                if u.path == "/methods":  # registre des méthodes d'analyse (methods.py) : la page n'en connaît aucune
+                    return self._json(methods.catalog())
+                if u.path == "/avis":  # avis de statut de la méthode choisie, sur les lésions suivies
+                    try:
+                        return self._json(self._avis(vol, q["key"]))
+                    except (KeyError, ValueError):
+                        raise
+                    except Exception as e:
+                        return self._json({"error": f"Avis impossible : {type(e).__name__}"})
                 if u.path == "/ref":
                     m = store.load_map(q["key"])
                     if not m:
@@ -776,7 +786,7 @@ def make_handler(state):
                                               self._off(q, "ob" if cmpd else "oa")))
                 return self.send_error(404)
             except (KeyError, ValueError):
-                if u.path.startswith(("/data", "/ref", "/follow", "/settings")):  # routes lues par la page en JSON
+                if u.path.startswith(("/data", "/ref", "/follow", "/settings", "/avis")):  # routes lues par la page en JSON
                     return self._json({"error": "Requête invalide"}, 400)
                 return self.send_error(400)
 
@@ -821,9 +831,39 @@ def make_handler(state):
                     "score": f["score"], "method": f["method"], "unit": state.sul["unit"], "new": new,
                     "rows": {k: r and {**_vals(r), "peak": r["peak"], "shift": r["shift"]} for k, r in rows.items()}}
 
+        def _cond(self, vol, labels):
+            """Conditions de la séance enregistrées avec ses mesures (comparabilité des dates) : en-têtes d'acquisition sans
+            identité, unité (SUL ou repli SUV) et référence foie (moyenne, écart-type)."""
+            try:
+                ref = labels is not None and state.liver_ref(vol[0], labels, vol[1])
+            except Exception:
+                ref = None
+            return {"acq": {k: vol[3][k] for k in ("Activité injectée", "Poids", "Incorporation", "Machine") if k in vol[3]},
+                    "unit": state.sul["unit"], "liver": {"mean": ref["mean"], "sd": ref["sd"]} if ref else None}
+
+        def _avis(self, vol, key):
+            """Avis de la méthode choisie pour la carte `key` : dates enregistrées, plus cette séance si le suivi y est
+            appliqué sans être enregistré (marquée provisoire)."""
+            m = store.load_map(key)
+            if not m:
+                return {"error": "Référence introuvable"}
+            dates = dict(m["dates"])
+            f = state.follow
+            if vol and f and f["key"] == key and f["vol"] is vol[0] and "rows" in f and f["date"] not in dates:
+                labels = state.organs[0] if state.organs else None
+                dates[f["date"]] = {"values": {k: _vals(r) for k, r in f["rows"].items()}, **self._cond(vol, labels), "provisoire": True}
+            return methods.avis(m, {d: dates[d] for d in sorted(dates, key=store.date_key)})
+
         def _ref_post(self, path, req, vol):
             """Carte de référence : définition (/ref/define), modification (/ref/update), ajout d'une date (/ref/record)."""
             suv, spacing, ctv, patient, folder = vol
+            if path == "/ref/update" and req.get("op") == "method":  # type de cancer + méthode, mémorisés avec le patient
+                m = store.load_map(req["key"])
+                if not m:
+                    return {"error": "Référence introuvable"}
+                m["analyse"] = methods.choose(req["cancer"], req["methode"])
+                store.save_map(req["key"], m)
+                return {"ok": True}
             labels, date, err = self._session(vol)
             if err:
                 return {"error": err}
@@ -848,7 +888,7 @@ def make_handler(state):
                     values[lid] = _vals(r)
                 store.save_map(key, {"version": 1, "ref_date": date, "folder": folder, "origin": list(state.origin or (0, 0, 0)),
                                      "spacing": list(spacing), "unit": state.sul["unit"], "lesions": lesions,
-                                     "dates": {date: {"values": values}}})
+                                     "dates": {date: {"values": values, **self._cond(vol, labels)}}})
                 state.follow = None
                 return {"key": key, "n": len(lesions)}
             key = req["key"]
@@ -862,7 +902,8 @@ def make_handler(state):
                     return {"error": "Cette séance est la référence : ses valeurs sont déjà enregistrées"}
                 if not followed:
                     return {"error": "Appliquez d'abord le suivi à cette séance"}
-                m["dates"][date] = {"shift": list(f["shift"]), "score": f["score"], "values": {k: _vals(r) for k, r in f["rows"].items()}}
+                m["dates"][date] = {"shift": list(f["shift"]), "score": f["score"], "values": {k: _vals(r) for k, r in f["rows"].items()},
+                                 **self._cond(vol, labels)}
             elif req["op"] == "add":  # point courant de la séance affichée (clic, ou nouvelle fixation validée)
                 cur = [int(v) for v in req["vox"]]
                 lid = f"L{1 + max([int(l['id'][1:]) for l in m['lesions']] or [0])}"

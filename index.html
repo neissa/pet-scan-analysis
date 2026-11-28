@@ -303,6 +303,11 @@
       <p id="fmsg" class="hint" role="status"></p>
       <table id="ftbl"></table>
       <div id="fnew"></div>
+      <div id="fanalyse" hidden>
+        <label class="row"><span>Type de cancer</span><select id="fcancer"></select></label>
+        <label class="row"><span>Méthode</span><select id="fmethod"></select></label>
+        <fieldset class="layers"><legend>Avis de statut</legend><div id="favis" role="status" aria-live="polite"></div></fieldset>
+      </div>
       <p class="hint">Mesure aux positions mémorisées, sans seuil global : SUVmax et SULmax dans 12 mm (voxels de la vessie, des reins, du cœur et du cerveau écartés),
         SULpeak (1 cm³) et volume à 50 % du max local. MTV et TLG ne servent à aucun statut. ⚠ excrétion possible : max &gt; 20 ou urine à moins de 20 mm
         (vessie, rein, trajet urétéral) ; la lésion reste mesurée.</p>
@@ -1338,6 +1343,7 @@ async function showMap() {
   fmap = fkey ? await fetch("/ref?key=" + fkey).then(x => x.json()) : null;
   if (fmap && fmap.error) fmap = null;
   renderFollow();
+  await renderAnalyse();
 }
 // Une ligne par lésion, une colonne par date (référence, dates enregistrées, puis cette séance si elle n'est pas enregistrée) ;
 // variation du SUVmax en % par rapport à la référence et à la date précédente (dernière colonne mesurée).
@@ -1439,6 +1445,36 @@ $("frecord").onclick = async () => {
   await showMap(); loadData();
 };
 $("frefs").onchange = () => { fkey = $("frefs").value; fres = null; $("frecord").disabled = true; showMap(); };
+// Méthode d'analyse : registre côté serveur (/methods), la page n'en code aucune ; choix mémorisé avec le patient,
+// avis de statut (/avis) calculé sur les lésions suivies (dates enregistrées + cette séance si le suivi y est appliqué).
+let mcat = null;
+async function renderAnalyse() {
+  $("fanalyse").hidden = !fmap;
+  if (!fmap) return;
+  mcat = mcat || await fetch("/methods").then(x => x.json());
+  const a = await fetch("/avis?key=" + fkey).then(x => x.json()), ch = a.choix || fmap.analyse || {};
+  $("fcancer").innerHTML = mcat.cancers.map(c => `<option value="${c.id}">${esc(c.nom)}</option>`).join("");
+  if (ch.cancer) $("fcancer").value = ch.cancer;
+  fillMethods(ch.methode);
+  if (a.error) return $("favis").innerHTML = `<p class="warn">${esc(a.error)}</p>`;
+  $("favis").innerHTML = `<p><b>${esc(a.libelle)}</b> (${esc(a.statut)}) · ${esc(a.methode)}</p>` +
+    a.details.map(d => `<p class="hint"><b>${esc(d.date)}${d.provisoire ? " (cette séance, non enregistrée)" : ""}</b> : ${esc(d.libelle)}. ${esc(d.texte)}` +
+      (d.exclues.length ? `<br>Exclues du calcul : ${esc(d.exclues.join(", "))}` : "") + "</p>").join("") +
+    a.avertissements.map(w => `<p class="warn">⚠ ${esc(w)}</p>`).join("") + `<p class="note">${esc(a.mention)}</p>`;
+}
+function fillMethods(sel) {
+  const c = $("fcancer").value, cat = mcat.cancers.find(x => x.id === c);
+  $("fmethod").innerHTML = mcat.methodes.filter(m => m.cancers.includes(c)).map(m =>
+    `<option value="${m.id}"${m.disponible ? "" : " disabled"} title="${esc(m.note)}">${esc(m.nom)}${m.disponible ? "" : " (bientôt)"}</option>`).join("");
+  $("fmethod").value = sel || (cat && cat.defaut) || "";
+}
+async function saveMethod() {
+  const r = await post("/ref/update", { key: fkey, op: "method", cancer: $("fcancer").value, methode: $("fmethod").value });
+  if (r.error) $("fmsg").textContent = r.error;
+  await showMap();
+}
+$("fcancer").onchange = () => { fillMethods(); saveMethod(); };
+$("fmethod").onchange = saveMethod;
 
 // --- Données enregistrées : inventaire sans identité (appli et navigateur), aperçu puis suppression confirmée ---
 const lsKeys = () => { const k = []; try { for (let i = 0; i < localStorage.length; i++) k.push(localStorage.key(i)); } catch {} return k; };

@@ -394,6 +394,11 @@ def test_reference_map_follow_three_dates_excretion_new_fixation_and_deletion():
         assert m["dates_sorted"] == ["01/04/2026", "01/07/2026", "01/09/2026"] and "folder" not in m and m["folder_name"] == "refA"
         assert [m["dates"][d]["values"]["L1"]["suv_max"] for d in m["dates_sorted"]] == [8.0, 6.0, 4.0]
         assert [l["name"] for l in m["lesions"]] == ["rate", "vessie ?", "L3"] and m["lesions"][2]["vox"] == [42, 42, 34]
+        assert all(m["dates"][d]["unit"] == "SUV" and "acq" in m["dates"][d] for d in m["dates_sorted"])  # conditions par date
+        a = json.loads(_get(srv, f"/avis?key={key}")[1])  # PERCIST sur les mesures réelles : L1 8 → 6 → 4, L2 (urine) exclue,
+        d = a["details"]                                   # L3 retenue le 01/09 = nouvelle lésion
+        assert [x["statut"] for x in d] == ["MMS", "PMP"] and d[1]["nouvelles"] == ["L3"], a
+        assert d[0]["exclues"] == ["vessie ? (excrétion possible)"] and d[1]["cible"] == ["rate", 4.0]
         raw = (store.DIR / "patients" / f"{key}.json").read_text(encoding="utf-8")
         assert "PH-0001" not in raw and "Fantôme" not in raw and "1950" not in raw
         assert _get(srv, f"/data/delete?what=patient&key={key}")[0] == 400                      # confirmation exigée
