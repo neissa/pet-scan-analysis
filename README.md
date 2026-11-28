@@ -13,7 +13,7 @@ Les applications prêtes à l'emploi sont dans la section [**Releases**](../../r
 - `PetScan-win64.zip` : Windows, sans installer Python (décompresser, lancer `PetScan.exe` ; SmartScreen peut avertir, exécutable non signé).
 - `PetScan-android-debug.apk` : tablette Android 8.0+ (APK de debug, à autoriser en « sources inconnues »).
 
-Ou depuis les sources :
+Ou depuis les sources (**Python 3.10 ou plus**, numpy ≥ 1.23, scipy ≥ 1.8.1, matplotlib ≥ 3.6, pydicom, pillow ; ce sont les versions embarquées dans l'APK, testées aussi en 3.15) :
 
 ```
 pip install -e .

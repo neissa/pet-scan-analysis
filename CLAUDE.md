@@ -11,7 +11,7 @@ pip install -e .
 python viewer.py "<dossier DICOM>"   # http://127.0.0.1:8000 ; sans argument : choix du dossier dans la page
 python viewer.py --demo              # volume synthétique, sans DICOM
 python petscan.py <dossier> --thr 2.5 --mip mip.png   # CLI : SUV + lésions
-pytest -q                            # tous les tests (~10 s, fantômes synthétiques, pas de DICOM)
+pytest -q                            # tous les tests (à rejouer aussi sous Python 3.10 + numpy 1.23 / scipy 1.8.1 / matplotlib 3.6, versions de l'APK ; interpréteur `buildPython` de android/local.properties) (~10 s, fantômes synthétiques, pas de DICOM)
 pytest -q test_viewer.py -k autoalign   # un seul test
 python -m PyInstaller --noconfirm --clean --onedir --name PetScan --icon assets/netscan.ico --add-data "index.html;." viewer.py   # app Windows dans dist/PetScan (voir README)
 cd android; $env:JAVA_HOME="<JDK 17/21>"; .\gradlew.bat assembleDebug   # APK Android (Chaquopy, Python 3.10) : android/app/build/outputs/apk/debug (voir README)

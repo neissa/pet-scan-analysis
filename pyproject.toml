@@ -3,8 +3,8 @@ name = "pet-scan-analysis"
 version = "0.2.0"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.9"
-dependencies = ["numpy", "scipy", "pydicom", "matplotlib", "pillow"]
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.23", "scipy>=1.8.1", "pydicom", "matplotlib>=3.6", "pillow"]
 
 [tool.setuptools]
 py-modules = ["petscan"]
