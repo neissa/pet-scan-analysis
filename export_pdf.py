@@ -67,6 +67,10 @@ def build_pdf(render, shape, state, patient=None):
     fig = Figure(figsize=(W, H))
     fig.text(M / W, 1 - 0.7 / H, "Compte rendu TEP/CT", fontsize=16, fontweight="bold", va="center")
     fig.text(1 - M / W, 1 - 0.7 / H, datetime.now().strftime("Exporté le %d/%m/%Y à %H:%M"), fontsize=8, ha="right", va="center", color="#555")
+    for fx in (0.22, 0.5, 0.78):  # filigrane sous les images (zorder -1), en diagonale
+        for fy in (0.12, 0.3, 0.5, 0.7, 0.88):
+            fig.text(fx, fy, "NETScan · Recherche uniquement · Pas un dispositif médical", fontsize=9, rotation=25, ha="center", va="center",
+                     color="#808080", alpha=0.18, zorder=-1)
     y = 1.05  # position courante depuis le haut de la page, en pouces
 
     if patient:

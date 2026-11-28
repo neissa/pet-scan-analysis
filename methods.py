@@ -5,7 +5,7 @@ viewer.py et index.html ne connaissent aucune méthode : ils lisent `catalog()`,
 from dataclasses import dataclass
 
 CANCERS = {"dsrct": "Sarcome desmoplastique à petites cellules rondes", "general": "Autre / général"}
-MENTION = "Aide à la lecture calculée sur les lésions suivies : ce n'est pas un avis médical."
+MENTION = "Aide à la lecture calculée sur les lésions suivies : ce n'est pas un avis médical. Recherche uniquement."
 
 
 @dataclass(frozen=True)
