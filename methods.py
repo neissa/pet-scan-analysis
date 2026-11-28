@@ -84,6 +84,18 @@ def heterogeneite(ref, dates):
     return out
 
 
+def _grille(a, b, d):
+    """Avertissement de taille de voxel de la date d (b) face à la référence (a) ; rien si elles diffèrent de 5 % au plus."""
+    fmt = lambda sp: " × ".join(f"{s:.2f}".replace(".", ",") for s in sp)
+    if not b:
+        return [f"{d} : taille de voxel non enregistrée"]  # date ancienne
+    if not a:
+        return [f"{d} : taille de voxel de la référence non enregistrée"]
+    if any(abs(y - x) > 0.05 * x for x, y in zip(a, b)):
+        return [f"{d} : grille différente ({fmt(a)} → {fmt(b)} mm) : SUVmax et volume dépendent de la taille du voxel"]
+    return []
+
+
 def avis(m, dates, contexte=None):
     """Avis de statut de la carte `m` (store) ; dates : {date: mesures} dans l'ordre chronologique, référence comprise.
     Sans choix mémorisé : type « Autre / général » et sa méthode par défaut."""
@@ -97,4 +109,8 @@ def avis(m, dates, contexte=None):
     for x in r.get("details", []):
         if x["date"] in het:
             x["heterogeneite"] = het[x["date"]]
+    sp0 = ref["spacing"] or (dates.get(ref["date"]) or {}).get("spacing")
+    for d, e in dates.items():  # avertissements seulement : aucun statut n'en dépend ; séance affichée sans espacement ignorée
+        if d != ref["date"] and (e.get("spacing") or not e.get("provisoire")):
+            r["avertissements"] = [*r.get("avertissements", []), *_grille(sp0, e.get("spacing"), d)]
     return {**r, "choix": ch, "methode": meth.nom, "mention": MENTION}

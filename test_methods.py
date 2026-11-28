@@ -179,3 +179,40 @@ def test_choix_memorise_avec_le_patient_puis_supprime():
         assert store.load_map(key) is None and "error" in json.loads(_get(srv, f"/avis?key={key}")[1])
     finally:
         srv.shutdown()
+
+
+SP = [3.0, 1.37, 1.37]  # z, y, x en mm
+
+
+def avis_voxel(sp_cur, provisoire=False, sp_ref=SP):
+    """Avis PERCIST à deux dates : référence (espacement sp_ref) et date de suivi (espacement sp_cur, None = absent)."""
+    m = {"ref_date": R, "lesions": [les("L1")], "unit": "SUL", "spacing": sp_ref}
+    cur = {"values": {"L1": v(6)}, "acq": ACQ, "liver": LIV, "unit": "SUL", "spacing": sp_cur}
+    dates = {R: {"values": {"L1": v(10)}, "acq": ACQ, "liver": LIV, "unit": "SUL", "spacing": sp_ref}, D: cur}
+    if provisoire:
+        cur["provisoire"] = True
+    return methods.avis(m, dates)
+
+
+def test_voxel_identique_ou_a_5_pct_pas_davertissement():
+    base = avis_voxel(SP)
+    assert not [w for w in base["avertissements"] if "voxel" in w or "grille" in w]
+    r = avis_voxel([3.0, 1.42, 1.42])  # +3,6 % : sous le seuil
+    assert not [w for w in r["avertissements"] if "grille" in w]
+
+
+def test_voxel_different_avertissement_sans_changer_le_statut():
+    r = avis_voxel([3.0, 1.56, 1.56])  # 1,37 → 1,56 mm : +14 %
+    grille = [w for w in r["avertissements"] if "grille" in w]
+    assert grille == [f"{D} : grille différente (3,00 × 1,37 × 1,37 → 3,00 × 1,56 × 1,56 mm) : "
+                      "SUVmax et volume dépendent de la taille du voxel"]
+    assert r["statut"] == avis_voxel(SP)["statut"] and r["details"][0]["statut"] == avis_voxel(SP)["details"][0]["statut"]
+
+
+def test_voxel_absent_avertissement_discret():
+    r = avis_voxel(None)
+    assert f"{D} : taille de voxel non enregistrée" in r["avertissements"]
+    assert not [w for w in r["avertissements"] if "grille" in w]
+    assert r["statut"] == avis_voxel(SP)["statut"]
+    r = avis_voxel(None, provisoire=True)  # séance affichée non enregistrée : rien à signaler sur son espacement
+    assert not [w for w in r["avertissements"] if "voxel" in w]
